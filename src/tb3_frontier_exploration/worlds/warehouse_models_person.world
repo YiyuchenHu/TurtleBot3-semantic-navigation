@@ -202,5 +202,43 @@
       <pose>0.0 0.0 0 0 0 0</pose>
     </include>
 
+    <!-- ================================================================
+         OPEN-VOCABULARY TARGETS (Phase 2b) — three objects that are NOT
+         in the YOLO/COCO 80-class list, for the LocateAnything detect
+         vocabulary. Placed at the mid-wall points (N/S/E; W stays clear
+         for the default spawn at (-1.5, 0)), ≥ 2.0 m centre-to-centre
+         from every person so the semantic memory merge radius (1.5 m)
+         cannot fuse them. All three are solid at the LDS-01 scan height
+         (~0.17 m), so the map-memory island check has real occupancy to
+         snap to. `<static>true</static>` overrides the trash can's and
+         cone's dynamic SDF so robot bumps cannot move them (the person
+         models are already static).
+         ================================================================ -->
+
+    <!-- North wall: bookshelf, open side facing the room centre (its
+         open side faces local -y at yaw 0). Occupies y ∈ [2.2, 2.61]. -->
+    <include>
+      <uri>model://bookshelf</uri>
+      <name>bookshelf_north</name>
+      <static>true</static>
+      <pose>0.0 2.6 0 0 0 0</pose>
+    </include>
+
+    <!-- South wall: FIRST 2015 trash can (green, ~0.58 m dia). -->
+    <include>
+      <uri>model://first_2015_trash_can</uri>
+      <name>trash_can_south</name>
+      <static>true</static>
+      <pose>0.0 -2.3 0 0 0 0</pose>
+    </include>
+
+    <!-- East wall: construction cone (orange). -->
+    <include>
+      <uri>model://construction_cone</uri>
+      <name>cone_east</name>
+      <static>true</static>
+      <pose>2.4 0.0 0 0 0 0</pose>
+    </include>
+
   </world>
 </sdf>

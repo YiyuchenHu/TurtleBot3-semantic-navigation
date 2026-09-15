@@ -107,6 +107,16 @@ _INDEX_FILLER = frozenset({"number", "no", "num"})
 _PHRASE_ALIASES: dict[str, str] = {
     "bench": "table",
     "stop sign": "stop_sign",
+    # LocateAnything registry (semantic_targets_la.yaml). Each alias only
+    # fires when its canonical name is in the loaded registry, so the
+    # YOLO path (semantic_targets.yaml, which has none of these) is
+    # unaffected.
+    "trash can": "trash_can",
+    "trashcan": "trash_can",
+    "garbage can": "trash_can",
+    "traffic cone": "cone",
+    "construction cone": "cone",
+    "shelf": "bookshelf",
 }
 
 
