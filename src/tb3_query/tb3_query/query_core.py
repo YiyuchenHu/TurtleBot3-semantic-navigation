@@ -120,7 +120,7 @@ _COMMAND_PREFIX = frozenset({
     "go", "to", "please", "navigate", "approach", "find", "me", "take",
     "bring", "get", "can", "you", "i", "want", "need", "would", "like",
     "could", "help", "with", "drive", "move", "head", "locate", "search",
-    "for", "reach", "visit", "us",
+    "for", "reach", "visit", "us", "look",
 }) | _ARTICLES
 
 # Politeness tail that may FOLLOW the expression ("find the bicycle
@@ -156,6 +156,43 @@ def extract_expression(text: str) -> Optional[str]:
         j -= 1
     expression = " ".join(tokens[i:j])
     return expression or None
+
+
+def attribute_expression(
+    text: str,
+    semantic_name: str,
+    detector_label: str,
+) -> Optional[str]:
+    """Detect an attribute-qualified registry-class command (R04).
+
+    `parse_command` matches on single tokens, so "find the person wearing
+    a green shirt" resolves to the registry class `person` — and a search
+    would inject plain "person" and stop at ANY person. If the command
+    carries meaningful tokens beyond the class reference itself, the whole
+    expression must be treated as open-vocabulary instead.
+
+    Returns the full expression ("person wearing a green shirt") when the
+    command has attribute tokens, else None (pure class reference —
+    registry path stays in charge).
+
+        "find the person wearing a green shirt" -> "person wearing a green shirt"
+        "go to the person"                      -> None
+        "go to person 3"                        -> None   (index, not attribute)
+        "go to the traffic cone"                -> None   (alias tokens)
+    """
+    expr = extract_expression(text)
+    if expr is None:
+        return None
+    class_words = set(_normalize(semantic_name).split())
+    class_words |= set(_normalize(detector_label).split())
+    for phrase, canonical in _PHRASE_ALIASES.items():
+        if canonical == semantic_name:
+            class_words |= set(_normalize(phrase).split())
+    residual = [t for t in _normalize(expr).split()
+                if t not in class_words
+                and t not in _INDEX_FILLER
+                and not t.isdigit()]
+    return expr if residual else None
 
 _PHRASE_ALIASES: dict[str, str] = {
     "bench": "table",

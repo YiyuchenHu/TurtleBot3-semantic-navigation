@@ -41,6 +41,7 @@ from ament_index_python.packages import get_package_share_directory
 
 from tb3_query.query_core import (
     MemoryObject,
+    attribute_expression,
     extract_expression,
     load_target_mapping,
     parse_command,
@@ -172,6 +173,21 @@ class SemanticQueryNode(Node):
                 )
                 return
             desired_index = parsed.desired_index
+            # ── Attribute-qualified class (R04) ──────────────────────────
+            # "find the person wearing a green shirt" token-matches the
+            # registry class `person`, but injecting plain "person" would
+            # stop the search at ANY person. Commands with attribute
+            # tokens beyond the class reference demote to the
+            # open-vocabulary expression path (full expression becomes
+            # the injected vocabulary word and the landmark class).
+            attr_expr = attribute_expression(raw, semantic_name,
+                                             detector_label)
+            if attr_expr is not None and desired_index is None:
+                semantic_name = attr_expr
+                detector_label = attr_expr
+                self.get_logger().info(
+                    "Attribute-qualified '%s' → open-vocabulary "
+                    "expression: '%s'" % (parsed.semantic_name, attr_expr))
             if desired_index is not None:
                 self.get_logger().info(
                     "Parsed: semantic='%s'  desired_index=%d"
