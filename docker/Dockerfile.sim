@@ -37,27 +37,35 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         python3-colcon-common-extensions \
         python3-pip \
         git curl unzip \
+        xdotool \
     && rm -rf /var/lib/apt/lists/*
 
 # ── Gazebo models baked into the image ───────────────────────────────────
 # warehouse_models_person.world includes model://person_standing (plus
-# ground_plane and sun). None of them ship with the gazebo11 apt packages;
-# Gazebo Classic would try to fetch them from the online model database at
-# runtime, which stalls for minutes on this host (VPN blocks container
-# egress). Fetch them once at build time instead — from the osrf
-# gazebo_models GitHub repo (a sparse, blobless clone: ~the three model
-# dirs, not the full ~1 GB repo). Fuel is NOT equivalent: its copy is
-# renamed "Standing person", which breaks model://person_standing lookup.
+# ground_plane and sun), and — Phase 2b — model://bookshelf,
+# model://first_2015_trash_can and model://construction_cone for the
+# open-vocabulary targets. None of them ship with the gazebo11 apt
+# packages; Gazebo Classic would try to fetch them from the online model
+# database at runtime, which stalls for minutes on this host (VPN blocks
+# container egress). Fetch them once at build time instead — from the
+# osrf gazebo_models GitHub repo (a sparse, blobless clone of just these
+# dirs, not the full ~1 GB repo). Fuel is NOT equivalent: its copies are
+# renamed ("Standing person"), which breaks model:// URI lookup.
 RUN set -e; \
     git clone --depth 1 --filter=blob:none --sparse \
         https://github.com/osrf/gazebo_models /tmp/gazebo_models; \
-    git -C /tmp/gazebo_models sparse-checkout set person_standing ground_plane sun; \
+    git -C /tmp/gazebo_models sparse-checkout set person_standing ground_plane sun \
+        bookshelf first_2015_trash_can construction_cone; \
     mkdir -p /opt/gazebo_models; \
     cp -r /tmp/gazebo_models/person_standing /tmp/gazebo_models/ground_plane \
-          /tmp/gazebo_models/sun /opt/gazebo_models/; \
+          /tmp/gazebo_models/sun /tmp/gazebo_models/bookshelf \
+          /tmp/gazebo_models/first_2015_trash_can \
+          /tmp/gazebo_models/construction_cone /opt/gazebo_models/; \
     rm -rf /tmp/gazebo_models; \
-    test -f /opt/gazebo_models/person_standing/model.sdf \
-    && test -f /opt/gazebo_models/person_standing/model.config
+    for m in person_standing bookshelf first_2015_trash_can construction_cone; do \
+        test -f /opt/gazebo_models/$m/model.sdf \
+        && test -f /opt/gazebo_models/$m/model.config; \
+    done
 
 # Empty URI disables the online model database entirely — every model the
 # worlds need is either baked in above or comes from turtlebot3_gazebo's
@@ -108,7 +116,12 @@ ENV TURTLEBOT3_MODEL=waffle_pi
 RUN useradd -m -u 1000 -s /bin/bash ubuntu \
     && mkdir -p /home/ubuntu/ws/build /home/ubuntu/ws/install /home/ubuntu/ws/log \
                 /home/ubuntu/.tb3_semantic_nav/evidence \
+                /home/ubuntu/.gazebo \
     && chown -R ubuntu:ubuntu /home/ubuntu
+# ^ .gazebo pre-created for the same reason as the ws dirs: compose
+# bind-mounts gazebo_gui.ini inside it, and a parent directory Docker
+# has to invent for a mount is root-owned — gzserver/gzclient then
+# SIGABRT on create_directory("~/.gazebo/server-11345").
 
 USER ubuntu
 WORKDIR /home/ubuntu/ws

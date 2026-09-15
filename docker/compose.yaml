@@ -1,6 +1,5 @@
-# ROS 2 Humble / Gazebo Classic sim stack (Phase 2a: sim service only —
-# the LocateAnything grounding service is added in Phase 2b once
-# grounding/ is ported into this repo).
+# ROS 2 Humble / Gazebo Classic sim stack + LocateAnything grounding
+# service (added in Phase 2b together with the ported grounding/ dir).
 #
 # Requires an NVIDIA GPU + the NVIDIA Container Toolkit on the host.
 # Every compose command takes BOTH files, in this order:
@@ -41,6 +40,11 @@ services:
       - evidence:/home/ubuntu/.tb3_semantic_nav
       # X11 socket for gzclient/RViz on the host display.
       - /tmp/.X11-unix:/tmp/.X11-unix:ro
+      # gzclient window geometry for demo recording, kept in the repo so
+      # it survives container recreation (R02a decision 2). Mounted rw:
+      # gzclient rewrites it on exit, which is how adjusted geometry
+      # persists — an unwanted diff is a plain `git checkout` away.
+      - ./gazebo_gui.ini:/home/ubuntu/.gazebo/gui.ini
     shm_size: "2gb"
     environment:
       - TURTLEBOT3_MODEL=waffle_pi
@@ -63,14 +67,50 @@ services:
               # required.
               capabilities: [gpu]
 
+  grounding:
+    build:
+      context: .
+      dockerfile: Dockerfile.grounding
+    image: tb3-semantic-nav-grounding
+    # Shares sim's netns: in-container ROS nodes reach the server at
+    # 127.0.0.1:8801, and the host does too because sim publishes the
+    # port loopback-only above.
+    network_mode: "service:sim"
+    volumes:
+      - ../grounding:/app
+      # LocateAnything-3B weights (~7 GB), already present in the
+      # surviving August volume — never re-fetched thanks to the
+      # offline switch below.
+      - hf_cache:/hf-cache
+    environment:
+      # Set to `mock` to fall back to the GPU-free HSV colour heuristic.
+      - GROUNDING_BACKEND=${GROUNDING_BACKEND:-locate_anything}
+      # Weights + pinned remote-code revision live in hf_cache; the VPN
+      # blocks container egress, and an online HF check would stall
+      # startup. Keep this on — and never clear the cache or change the
+      # model revision (R01 §5.10-7).
+      - HF_HUB_OFFLINE=1
+    depends_on:
+      - sim
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
 volumes:
   ws_build_humble:
   ws_install_humble:
   ws_log_humble:
   # Survivors of the August stack. Declared external so compose reuses
   # them as-is and can never recreate them (project ground rule). On a
-  # fresh machine: docker volume create docker_evidence (and, for Phase
-  # 2b, docker_hf_cache).
+  # fresh machine: docker volume create docker_evidence and
+  # docker_hf_cache.
   evidence:
     external: true
     name: docker_evidence
+  hf_cache:
+    external: true
+    name: docker_hf_cache
