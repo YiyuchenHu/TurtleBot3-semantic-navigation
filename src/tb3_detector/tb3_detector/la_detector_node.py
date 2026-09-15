@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import base64
 import json
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -160,6 +161,9 @@ class LaDetectorNode(Node):
         self.declare_parameter("detections_topic", "/detector_node/detections")
         self.declare_parameter("debug_image_topic", "/detector_node/debug_image")
         self.declare_parameter("publish_debug_image", True)
+        # R05: the debug image is republished at CAMERA rate with the most
+        # recent /detect overlay; boxes older than this turn grey.
+        self.declare_parameter("debug_stale_after_sec", 1.5)
         self.declare_parameter("jpeg_quality", 85)
         self.declare_parameter("queue_size", 5)
         self.declare_parameter("stats_interval_sec", 10.0)
@@ -185,6 +189,7 @@ class LaDetectorNode(Node):
         self._cross_iou = float(g("cross_class_iou"))
         self._occlusion_filter = bool(g("occlusion_filter"))
         self._pub_debug = bool(g("publish_debug_image"))
+        self._debug_stale_after = float(g("debug_stale_after_sec"))
         self._jpeg_quality = int(g("jpeg_quality"))
         queue = int(g("queue_size"))
         self._stats_interval = float(g("stats_interval_sec"))
@@ -203,6 +208,13 @@ class LaDetectorNode(Node):
         self._last_request_t: float | None = None   # ROS time, seconds
         self._angular_vel = 0.0
         self._server_seen = False
+        # R05 camera-rate debug: /detect runs in a worker thread so the
+        # image callback never blocks on HTTP; the callback republishes
+        # the debug image EVERY frame with the latest finished overlay.
+        # `_inflight` serializes requests — the detection cadence stays
+        # one request per max(min_interval, round-trip), same as before.
+        self._inflight = threading.Event()
+        self._overlay: dict | None = None   # swapped atomically by worker
 
         # Rolling stats for the [la_stats] line (report metrics: per-frame
         # /detect latency and cross-class dedup count).
@@ -288,6 +300,20 @@ class LaDetectorNode(Node):
         self._st["frames"] += 1
         now = self.get_clock().now().nanoseconds * 1e-9
 
+        try:
+            bgr = self._bridge.imgmsg_to_cv2(msg, desired_encoding="bgr8")
+        except Exception as e:
+            self.get_logger().warning("cv_bridge conversion failed: %s" % e)
+            return
+
+        # Camera-rate debug: every frame goes out with the most recent
+        # finished overlay, regardless of whether a request fires below.
+        if self._dbg_pub is not None:
+            self._publish_debug(bgr, msg.header)
+
+        if self._inflight.is_set():
+            self._st["skipped_interval"] += 1
+            return
         if (self._last_request_t is not None
                 and now - self._last_request_t < self._min_interval):
             self._st["skipped_interval"] += 1
@@ -296,16 +322,22 @@ class LaDetectorNode(Node):
             self._st["skipped_spin"] += 1
             return
 
-        try:
-            bgr = self._bridge.imgmsg_to_cv2(msg, desired_encoding="bgr8")
-        except Exception as e:
-            self.get_logger().warning("cv_bridge conversion failed: %s" % e)
-            return
-
-        # Mark the slot BEFORE the blocking HTTP call: queued frames that
-        # drain right after it returns must not fire immediately again.
+        # Mark the slot BEFORE dispatching: queued frames that drain while
+        # the worker runs must not fire immediately again.
         self._last_request_t = now
+        self._inflight.set()
+        threading.Thread(target=self._detect_worker,
+                         args=(bgr.copy(), msg.header), daemon=True).start()
 
+    def _detect_worker(self, bgr, header) -> None:
+        try:
+            self._run_detect(bgr, header)
+        except Exception as e:
+            self.get_logger().error("detect worker failed: %s" % e)
+        finally:
+            self._inflight.clear()
+
+    def _run_detect(self, bgr, header) -> None:
         t0 = time.monotonic()
         result = self._post_detect(bgr)
         rtt_ms = (time.monotonic() - t0) * 1000.0
@@ -353,10 +385,11 @@ class LaDetectorNode(Node):
             self._st["cover_counts"][d["label"]] = \
                 self._st["cover_counts"].get(d["label"], 0) + 1
 
-        self._det_pub.publish(self._to_msg(dets, msg.header))
-        if self._dbg_pub is not None:
-            self._publish_debug(bgr, dets, rtt_ms, msg.header,
-                                cover_dets=cover_dets)
+        self._det_pub.publish(self._to_msg(dets, header))
+        # Atomic swap read by the image callback; wall time (monotonic)
+        # drives the staleness grey-out.
+        self._overlay = dict(dets=dets, cover_dets=cover_dets,
+                             rtt_ms=rtt_ms, wall_t=time.monotonic())
         self._maybe_log_stats()
 
     # ── HTTP ────────────────────────────────────────────────────────────
@@ -432,23 +465,37 @@ class LaDetectorNode(Node):
             msg.detections.append(det)
         return msg
 
-    def _publish_debug(self, bgr, dets: list[dict], rtt_ms: float,
-                       header, cover_dets: list[dict] | None = None) -> None:
+    def _publish_debug(self, bgr, header) -> None:
+        """Camera-rate debug frame: current image + the LAST finished
+        /detect overlay. Boxes older than `debug_stale_after_sec` turn
+        grey — during the ~0.5 s round-trip the boxes lag the scene, and
+        past 1.5 s (server down, spin gate) they are visibly outdated."""
         vis = bgr.copy()
-        for d in (cover_dets or []):
-            # Coverage boxes (never published): thin grey, for eyeballing
-            # what the veto/occlusion machinery can see.
-            x1, y1, x2, y2 = [int(v) for v in d["bbox_xyxy"]]
-            cv2.rectangle(vis, (x1, y1), (x2, y2), (140, 140, 140), 1)
-            cv2.putText(vis, "[%s]" % d["label"], (x1, min(y2 + 14, vis.shape[0] - 4)),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, (140, 140, 140), 1)
-        for d in dets:
-            x1, y1, x2, y2 = [int(v) for v in d["bbox_xyxy"]]
-            cv2.rectangle(vis, (x1, y1), (x2, y2), (255, 120, 0), 2)
-            cv2.putText(vis, d["label"], (x1, max(y1 - 6, 12)),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 120, 0), 2)
-        cv2.putText(vis, "LA /detect %.0f ms" % rtt_ms, (8, 20),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
+        ov = self._overlay
+        if ov is None:
+            cv2.putText(vis, "LA no detection yet", (8, 20),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
+        else:
+            age = time.monotonic() - ov["wall_t"]
+            stale = age > self._debug_stale_after
+            det_color = (160, 160, 160) if stale else (255, 120, 0)
+            for d in ov["cover_dets"]:
+                # Coverage boxes (never published): thin grey, for
+                # eyeballing what the veto/occlusion machinery can see.
+                x1, y1, x2, y2 = [int(v) for v in d["bbox_xyxy"]]
+                cv2.rectangle(vis, (x1, y1), (x2, y2), (140, 140, 140), 1)
+                cv2.putText(vis, "[%s]" % d["label"],
+                            (x1, min(y2 + 14, vis.shape[0] - 4)),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.45, (140, 140, 140), 1)
+            for d in ov["dets"]:
+                x1, y1, x2, y2 = [int(v) for v in d["bbox_xyxy"]]
+                cv2.rectangle(vis, (x1, y1), (x2, y2), det_color, 2)
+                cv2.putText(vis, d["label"], (x1, max(y1 - 6, 12)),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.55, det_color, 2)
+            cv2.putText(vis, "LA /detect %.0f ms | boxes %.1fs ago%s"
+                        % (ov["rtt_ms"], age, " (STALE)" if stale else ""),
+                        (8, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
+                        (0, 255, 255), 1)
         try:
             dbg = self._bridge.cv2_to_imgmsg(vis, encoding="bgr8")
             dbg.header = header
