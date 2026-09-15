@@ -15,21 +15,43 @@ la_detector_node:
     request_timeout_sec: 5.0
 
     # ── Vocabulary ─────────────────────────────────────────
-    # DEFAULT = SEARCH-FIRST (R04): the base vocabulary is EMPTY, so
-    # NOTHING is mapped during exploration and every user command goes
-    # through the search link — the query expression is injected via
-    # /active_search and is the only class that can be published and
-    # promoted. This is the "language-guided target search" demo shape.
+    # DEFAULT = MAP-AND-SEARCH (R05): the five registry classes map
+    # during exploration, so a repeated command ("go to the bookshelf")
+    # is answered from memory; color-attribute person queries and
+    # anything else outside the registry go through the search link
+    # (injection unchanged — R04 acceptance path).
     #
-    # ROS 2 Humble rejects a literal empty list (type-inferred as
-    # BYTE_ARRAY against the STRING_ARRAY declaration), so an empty
-    # string entry is used instead; the node strips blank entries.
+    # The shirt-color expressions were TRIED as vocabulary entries
+    # (publish colored persons under their expressions, R05 step 3
+    # first attempt) and demoted back to coverage after two failed
+    # mapping smokes. Measured failure modes, ~10 min exploration each:
+    #   * far-box mislocalization: a distant person's expression box
+    #     whose centre column crossed a nearer object planted
+    #     "person wearing a blue shirt" landmarks on the red person,
+    #     the trash can and a white person (n=8 each). The R05 height
+    #     gate in the localizer now kills these (92 blue drops in
+    #     smoke 2) — but not the second mode:
+    #   * color-collision force-matches ON the object: the ORANGE cone
+    #     label force-matched the RED-shirt person, the GREEN trash can
+    #     label the GREEN-shirt person, and blue beat "person" for
+    #     white persons via dedup priority (token-subset boxes agree,
+    #     the more specific label won). These boxes sit on the target
+    #     itself at the right size, so no geometric filter can reject
+    #     them.
+    # As coverage the expressions VETO exactly those force-matches
+    # (the red person's "person wearing a red shirt" coverage box
+    # disagrees with a "traffic cone" box on the same object) — the
+    # R02c/R04-proven mechanism. Colored persons map as plain "person"
+    # (their expression coverage box is a token-subset agreement).
     #
     # Other profiles (detector_config launch argument, runbook §7):
-    #   * la_detector_four_class.yaml — pre-R04 default, all 4 world
-    #     classes map during exploration.
+    #   * la_detector_search_first.yaml — the R04 demo shape: empty
+    #     vocabulary, nothing maps, every command searches.
+    #   * la_detector_four_class.yaml — pre-R04 default, 4 world
+    #     classes only.
     #   * la_detector_person_only.yaml — R02c acceptance profile.
-    vocabulary: [""]
+    vocabulary: ["person", "bookshelf", "trash can", "traffic cone",
+                 "concrete barrier"]
 
     # ── Search-link injection ──────────────────────────────
     # Latched String from the coordinator: a free-form expression to
@@ -51,16 +73,24 @@ la_detector_node:
     # (including the active search term — a searched class must not
     # veto itself).
     #
-    # With the search-first empty vocabulary EVERY request is coverage-
-    # driven, and the list carries two families:
-    #   * the four physical world classes — same role as in R02c;
-    #   * the shirt-color person expressions — R04 probe measured that
-    #     "person wearing a green shirt" + "person" alone FORCE-MATCHES
-    #     the wrong-colored person (score 1.0, 6/6 negative cases);
-    #     with the other colors + white present as correct alternatives
-    #     the same 6 cases went 12/12 (reports/R04_probe/). They are
-    #     what makes a color-attribute search able to say "no".
+    # With the R05 vocabulary the effective coverage is the four
+    # shirt-color expressions. They carry two jobs:
+    #   * color-collision protection (R05): the cone label force-
+    #     matches the red-shirt person and the trash-can label the
+    #     green-shirt person (matching colors); the person's own
+    #     expression coverage box disagrees with those boxes and
+    #     vetoes them. Without this, ~10 min of exploration promoted
+    #     a "traffic cone" landmark ON the red person and a
+    #     "trash can" landmark ON the green person.
+    #   * correct-alternative set for color searches (R04 probe:
+    #     negatives 0/6 without the full color set, 12/12 with it —
+    #     reports/R04_probe/).
+    # The physical classes stay listed for profile-switching safety:
+    # the node subtracts anything already in the effective vocabulary,
+    # so they are harmless here and become real coverage again under a
+    # smaller-vocabulary profile.
     coverage_categories: ["person", "bookshelf", "trash can", "traffic cone",
+                          "concrete barrier",
                           "person wearing a green shirt",
                           "person wearing a red shirt",
                           "person wearing a blue shirt",

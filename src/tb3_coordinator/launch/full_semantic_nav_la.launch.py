@@ -183,11 +183,13 @@ def generate_launch_description():
     # THE difference from the baseline: la_detector_node instead of the
     # YOLO detector.launch.py include. Publishes on the same absolute
     # topics, so localizer/memory/RViz need no changes.
-    # detector_config selects the la_detector parameter profile:
-    #   default              → config/la_detector.yaml (4-class vocabulary)
-    #   R02c acceptance demo → config/la_detector_person_only.yaml
-    #     (["person"] only; bookshelf / trash can / cone are found via
-    #      the search link — see docs/la_runbook.md §7)
+    # detector_config selects the la_detector parameter profile
+    # (docs/la_runbook.md §7):
+    #   default → config/la_detector.yaml (R05 map-and-search: registry
+    #     classes + shirt-color expressions all map during exploration)
+    #   la_detector_search_first.yaml — R04 demo shape (empty vocabulary)
+    #   la_detector_four_class.yaml   — pre-R04 default
+    #   la_detector_person_only.yaml  — R02c acceptance demo
     la_detector = Node(
         package="tb3_detector",
         executable="la_detector_node",
@@ -297,11 +299,13 @@ def generate_launch_description():
             "detector_config",
             default_value=os.path.join(pkg_det, "config", "la_detector.yaml"),
             description=(
-                "la_detector_node parameter file. Default: the R04 "
-                "search-first profile (empty vocabulary — every command "
-                "goes through the search link). Other profiles: "
-                "la_detector_four_class.yaml (pre-R04 default), "
-                "la_detector_person_only.yaml (R02c acceptance)."
+                "la_detector_node parameter file. Default: the R05 "
+                "map-and-search profile (registry classes + shirt-color "
+                "expressions all map; unmapped queries still search). "
+                "Other profiles: la_detector_search_first.yaml (R04 "
+                "demo shape), la_detector_four_class.yaml (pre-R04 "
+                "default), la_detector_person_only.yaml (R02c "
+                "acceptance)."
             ),
         ),
         DeclareLaunchArgument(
