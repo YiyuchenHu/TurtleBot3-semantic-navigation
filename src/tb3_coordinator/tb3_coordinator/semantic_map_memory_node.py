@@ -460,6 +460,25 @@ class SemanticMapMemoryNode(Node):
         # (3 stray observations).
         self.declare_parameter("search_min_observations", 5)
         self.declare_parameter("active_search_topic", "/active_search")
+        # Minimum range for observations of the ACTIVE search class.
+        # Detect-mode forced choice is strongest at very close range: a
+        # frame-filling close-up of ANY object tends to be labeled with
+        # whatever plausible category is on offer (R02c: a dark person
+        # at 0.7 m boxed "trash can" by every mode incl. /ground; the
+        # bookshelf at 0.5 m boxed "traffic cone" 74 times in 89 s,
+        # relabeling the landmark and sending the robot to the shelf).
+        # Legitimate search promotions happen at 1-2.5 m during
+        # exploration; close-range hits are noise.
+        self.declare_parameter("search_min_range_m", 0.9)
+        # Classes the detector can observe at ALL times (its base
+        # vocabulary). A landmark whose class is neither here nor the
+        # active search label cannot be relabeled away: its class has
+        # zero observation opportunity, so the challenger's counts are
+        # one-sided evidence. Measured (R02c run A): 61 s after the
+        # bookshelf search ended, drive-by person mislocalizations hit
+        # 1.5x the frozen bookshelf count and flipped the freshly
+        # navigated-to landmark to person_3.
+        self.declare_parameter("observable_classes", ["person"])
         self.declare_parameter("geometry_check_enabled", True)
         self.declare_parameter("geometry_check_radius_cells", 12)
         self.declare_parameter("person_max_islands", 2)
@@ -509,6 +528,10 @@ class SemanticMapMemoryNode(Node):
         self._search_min_obs = int(
             self.get_parameter("search_min_observations").value)
         self._search_label = None  # active /active_search expression
+        self._search_min_range = float(
+            self.get_parameter("search_min_range_m").value)
+        self._observable = {str(v).lower() for v in
+                            self.get_parameter("observable_classes").value}
 
         self._geom_enabled = self.get_parameter("geometry_check_enabled").value
         self._geom_radius = self.get_parameter("geometry_check_radius_cells").value
@@ -642,6 +665,14 @@ class SemanticMapMemoryNode(Node):
                            "r=%.2f > max %.2f (+%.2f) raw=(%.2f,%.2f) id=%s"
                            % (obs_range, class_max, obs_range - class_max,
                               raw_x, raw_y, obs_id))
+                continue
+            if (self._search_label is not None
+                    and label == self._search_label
+                    and obs_range < self._search_min_range):
+                self._note("range", label,
+                           "r=%.2f < search min %.2f (close-range forced-"
+                           "choice guard) id=%s"
+                           % (obs_range, self._search_min_range, obs_id))
                 continue
 
             pt_in = PointStamped()
@@ -898,6 +929,15 @@ class SemanticMapMemoryNode(Node):
                    % (lm.landmark_id, lm.semantic_class, label,
                       lm.class_counts[label], d, lm.counts_summary()))
         if not self._relabel_enabled:
+            return
+        # One-sided-evidence guard: a landmark whose class is not
+        # currently observable (not in the base vocabulary and not the
+        # active search label) cannot defend its count, so it keeps its
+        # label. Without this, every search-promoted landmark is
+        # eventually flipped by drive-by mislocalizations of observable
+        # classes once its own count freezes at vocabulary clear.
+        if (lm.semantic_class not in self._observable
+                and lm.semantic_class != self._search_label):
             return
         # Search-aware challenger threshold. Measured need (R02c smoke
         # run 1): with the searched class absent from the mapping

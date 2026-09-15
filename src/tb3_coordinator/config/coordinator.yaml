@@ -137,6 +137,18 @@ semantic_map_memory_node:
     # rejects the run-1 ghost pattern (3 stray observations).
     search_min_observations:   5
     active_search_topic:       "/active_search"
+    # Close-range forced-choice guard: observations of the active
+    # search class below this range are rejected. Measured R02c run A:
+    # parked 0.5 m from the bookshelf during a cone search, the shelf
+    # close-up was boxed "traffic cone" 74x in 89 s and hijacked the
+    # search. Legitimate promotions happen at 1-2.5 m.
+    search_min_range_m:        0.9
+    # A landmark whose class is not currently observable (base
+    # vocabulary or active search label) cannot be relabeled away —
+    # its count is frozen, so challenger counts are one-sided
+    # evidence. Measured R02c run A: bookshelf_0 flipped to person 61 s
+    # after its search cleared.
+    observable_classes:        ["person"]
     wall_boundary_margin_m:   0.20
 
     # ── Landmark relabelling ───────────────────────────────
