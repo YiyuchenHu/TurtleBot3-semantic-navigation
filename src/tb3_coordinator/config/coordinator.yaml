@@ -13,6 +13,11 @@ coordinator_node:
     navigate_to_pose_action:  "navigate_to_pose"
     nav_goal_timeout_sec:     60.0
     auto_resume_exploration:  true
+    # R04 demo shape: after TARGET_REACHED / TARGET NOT FOUND go to IDLE
+    # and hold position (exploration off, zero cmd_vel) until the next
+    # user command. Takes precedence over auto_resume_exploration; set
+    # false to restore the pre-R04 auto-resume behavior.
+    hold_after_goal:          true
     resume_delay_sec:         3.0
 
     # ── Search link (Phase 2c) ─────────────────────────────────
@@ -136,6 +141,14 @@ semantic_map_memory_node:
     # §5.1 measured sparse-view candidates expiring at 7/8. 5 still
     # rejects the run-1 ghost pattern (3 stray observations).
     search_min_observations:   5
+    # Candidate expiry for the ACTIVE search class only. The generic
+    # candidate_timeout (45 s) assumes the mapping path's steady stream;
+    # a searched class is seen only when exploration happens to face it
+    # (drive-by bursts). R04 smoke 2 measured the true green-shirt
+    # candidate expiring at n=4/5, age exactly 45 s, twice in one
+    # search. 150 s bridges the gap between two exploration passes
+    # while still letting stray mislabel clusters die between searches.
+    search_candidate_timeout:  150.0
     active_search_topic:       "/active_search"
     # Close-range forced-choice guard: observations of the active
     # search class below this range are rejected. Measured R02c run A:

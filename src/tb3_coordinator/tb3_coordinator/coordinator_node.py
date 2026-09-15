@@ -113,6 +113,11 @@ class CoordinatorNode(Node):
         self.declare_parameter("status_topic", "~/status")
         self.declare_parameter("navigate_to_pose_action", "navigate_to_pose")
         self.declare_parameter("auto_resume_exploration", True)
+        # R04 demo shape: after a navigation terminal state (TARGET_REACHED
+        # or TARGET NOT FOUND) go to IDLE and hold position instead of
+        # auto-resuming exploration. Takes precedence over
+        # auto_resume_exploration; set false to restore the old behavior.
+        self.declare_parameter("hold_after_goal", True)
         self.declare_parameter("resume_delay_sec", 3.0)
         self.declare_parameter("nav_goal_timeout_sec", 60.0)
         self.declare_parameter("enable_perception_sweep", True)
@@ -143,6 +148,7 @@ class CoordinatorNode(Node):
         status_topic     = self.get_parameter("status_topic").value
         nav_action_name  = self.get_parameter("navigate_to_pose_action").value
         self._auto_resume = self.get_parameter("auto_resume_exploration").value
+        self._hold_after_goal = self.get_parameter("hold_after_goal").value
         self._resume_delay = self.get_parameter("resume_delay_sec").value
         self._nav_timeout = self.get_parameter("nav_goal_timeout_sec").value
         self._sweep_enabled = self.get_parameter("enable_perception_sweep").value
@@ -644,6 +650,18 @@ class CoordinatorNode(Node):
         if self._search_label is not None and self._mode in (
                 Mode.TARGET_REACHED, Mode.TARGET_FAILED):
             self._clear_search("navigation terminal: %s" % self._mode.name)
+
+        if self._hold_after_goal:
+            terminal = self._mode.name
+            self._set_exploration(False)
+            self._cmd_vel_pub.publish(Twist())
+            self._set_mode(Mode.IDLE)
+            self.get_logger().info(
+                "[hold] %s → IDLE — holding position, exploration stays off "
+                "(hold_after_goal:=false restores auto-resume)" % terminal)
+            self._publish_status(
+                "holding position after %s — send a new command" % terminal)
+            return
 
         if not self._auto_resume:
             self.get_logger().info(
