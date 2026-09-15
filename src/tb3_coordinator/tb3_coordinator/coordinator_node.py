@@ -15,23 +15,48 @@ State model
 -----------
   EXPLORING ──(user cmd)──► SEMANTIC_QUERYING ──(query ok)──► SEMANTIC_NAV
       ▲                          │(query fail)                    │
-      │                          ▼                                │ Nav2 result
-      │                     TARGET_FAILED ◄── Nav2 fail ──────────┤
-      │                          │                                ▼
-      └──(resume delay)──────────┘                          TARGET_REACHED
-                                                                 │
-                                 └──(resume delay)───────────────┘
+      │              (search suggested)│                          │ Nav2 result
+      │                          ▼    ▼                           │
+      │                SEARCHING   TARGET_FAILED ◄── Nav2 fail ───┤
+      │                 │   │            ▲                        ▼
+      │   (landmark appears) │(exploration                  TARGET_REACHED
+      │                 │   │ complete: NOT FOUND)                │
+      │                 ▼   └────────────┘                        │
+      │        SEMANTIC_QUERYING (re-query, memory now hits)      │
+      └──(resume delay, from TARGET_REACHED / TARGET_FAILED)──────┘
+
+Search link (Phase 2c): a query whose class has no landmark yet comes
+back with search_suggested. The coordinator then injects the expression
+into the detect vocabulary (latched /active_search), re-enables
+exploration, and watches the landmark topic for a promoted landmark of
+that class (promotion threshold search_min_observations, enforced by
+semantic_map_memory_node). Found → pause exploration and re-forward the
+original command (memory now resolves it; the normal goal chain runs).
+The injection stays active until the navigation reaches a terminal
+state, then it is cleared — the landmark persists. Exploration complete
+(latched /exploration_complete from goal_assignment_node) with no
+landmark → explicit NOT FOUND.
+
+Preemption (Phase 2c, R02b unresolved #3): a user command that arrives
+while a Nav2 goal is in flight is queued, the goal is cancelled, and
+the command is dispatched only when the old goal reports a terminal
+state — its ABORTED/CANCELED result never bleeds into TARGET_FAILED
+for the new command.
 
 Subscribed topics
 -----------------
-  /user_command                          std_msgs/String
-  /semantic_query_node/selected_target   tb3_query/SemanticQueryResult
-  /nav_goal_adapter_node/goal_pose       geometry_msgs/PoseStamped
+  /user_command                             std_msgs/String
+  /semantic_query_node/selected_target      tb3_query/SemanticQueryResult
+  /nav_goal_adapter_node/goal_pose          geometry_msgs/PoseStamped
+  /semantic_map_memory_node/landmark_objects vision_msgs/Detection3DArray
+  /exploration_complete                     std_msgs/Bool (latched)
+  /odom                                     nav_msgs/Odometry (search mileage)
 
 Published topics
 ----------------
   /exploration_enabled                   std_msgs/Bool
   /semantic_query_node/command           std_msgs/String
+  /active_search                         std_msgs/String (latched; ''=none)
   ~/status                               std_msgs/String
 """
 
@@ -47,6 +72,8 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 from std_msgs.msg import Bool, String
 from geometry_msgs.msg import Twist
 from geometry_msgs.msg import PoseStamped
+from nav_msgs.msg import Odometry
+from vision_msgs.msg import Detection3DArray
 from nav2_msgs.action import NavigateToPose
 
 try:
@@ -60,6 +87,7 @@ class Mode(Enum):
     EXPLORING = auto()
     SEMANTIC_QUERYING = auto()
     SEMANTIC_NAV = auto()
+    SEARCHING = auto()
     TARGET_REACHED = auto()
     TARGET_FAILED = auto()
     PERCEPTION_SWEEP = auto()
@@ -90,6 +118,22 @@ class CoordinatorNode(Node):
         self.declare_parameter("enable_perception_sweep", True)
         self.declare_parameter("sweep_angular_vel", 0.4)
         self.declare_parameter("sweep_duration_sec", 18.0)
+        # ── Search link (Phase 2c) ────────────────────────────────────
+        self.declare_parameter("active_search_topic", "/active_search")
+        self.declare_parameter("landmark_topic",
+                               "/semantic_map_memory_node/landmark_objects")
+        self.declare_parameter("exploration_complete_topic",
+                               "/exploration_complete")
+        self.declare_parameter("odom_topic", "/odom")
+        # Grace before an already-latched "exploration complete" is
+        # honored as NOT FOUND: gives the detector a chance to see the
+        # target from the current pose when the map was already fully
+        # explored before the search began.
+        self.declare_parameter("search_grace_sec", 15.0)
+        # Watchdog for the preemption path: if the cancelled goal's
+        # result callback never arrives, dispatch the queued command
+        # anyway after this long.
+        self.declare_parameter("preempt_watchdog_sec", 5.0)
 
         user_cmd_topic   = self.get_parameter("user_command_topic").value
         expl_en_topic    = self.get_parameter("exploration_enabled_topic").value
@@ -104,6 +148,8 @@ class CoordinatorNode(Node):
         self._sweep_enabled = self.get_parameter("enable_perception_sweep").value
         self._sweep_ang_vel = self.get_parameter("sweep_angular_vel").value
         self._sweep_duration = self.get_parameter("sweep_duration_sec").value
+        self._search_grace = self.get_parameter("search_grace_sec").value
+        self._preempt_watchdog_sec = self.get_parameter("preempt_watchdog_sec").value
 
         # ── State ─────────────────────────────────────────────────────────
         self._mode = Mode.EXPLORING
@@ -112,6 +158,18 @@ class CoordinatorNode(Node):
         self._nav_timeout_timer = None
         self._sweep_timer = None
         self._sweep_done = False
+        # Search link
+        self._search_label = None       # injected expression, or None
+        self._search_query = None       # original user command to re-forward
+        self._search_t0 = None          # rclpy Time at search start
+        self._search_dist = 0.0         # odometry mileage during SEARCHING
+        self._search_check_timer = None
+        self._expl_complete = False     # latest latched /exploration_complete
+        self._last_odom_xy = None
+        # Preemption
+        self._pending_cmd = None
+        self._preempt_timer = None
+        self._last_cmd = None
 
         # ── QoS ───────────────────────────────────────────────────────────
         reliable_qos = QoSProfile(
@@ -120,11 +178,21 @@ class CoordinatorNode(Node):
             durability=DurabilityPolicy.VOLATILE,
         )
 
+        # Latched QoS for the search-link topics: subscribers that start
+        # later (or restart) still see the current state.
+        latched_qos = QoSProfile(
+            depth=1,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+        )
+
         # ── Publishers ────────────────────────────────────────────────────
         self._expl_en_pub = self.create_publisher(Bool, expl_en_topic, reliable_qos)
         self._query_cmd_pub = self.create_publisher(String, query_cmd_topic, reliable_qos)
         self._status_pub = self.create_publisher(String, status_topic, reliable_qos)
         self._cmd_vel_pub = self.create_publisher(Twist, "/cmd_vel", reliable_qos)
+        self._active_search_pub = self.create_publisher(
+            String, self.get_parameter("active_search_topic").value, latched_qos)
 
         # ── Subscribers ───────────────────────────────────────────────────
         self.create_subscription(
@@ -133,11 +201,28 @@ class CoordinatorNode(Node):
             SemanticQueryResult, query_res_topic, self._query_result_cb, reliable_qos)
         self.create_subscription(
             PoseStamped, goal_pose_topic, self._goal_pose_cb, reliable_qos)
+        self.create_subscription(
+            Detection3DArray, self.get_parameter("landmark_topic").value,
+            self._landmark_cb, reliable_qos)
+        self.create_subscription(
+            Bool, self.get_parameter("exploration_complete_topic").value,
+            self._expl_complete_cb, latched_qos)
+        sensor_qos = QoSProfile(
+            depth=5,
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            durability=DurabilityPolicy.VOLATILE,
+        )
+        self.create_subscription(
+            Odometry, self.get_parameter("odom_topic").value,
+            self._odom_cb, sensor_qos)
 
         # ── Nav2 action client ────────────────────────────────────────────
         self._nav_client = ActionClient(self, NavigateToPose, nav_action_name)
 
         self._set_exploration(True)
+        # Clean latched state: a subscriber that outlived a previous
+        # coordinator (crash mid-search) drops its stale injection.
+        self._publish_active_search("")
         self._publish_status("started in EXPLORING mode")
 
         self.create_timer(5.0, self._check_sweep_trigger)
@@ -190,16 +275,54 @@ class CoordinatorNode(Node):
         if self._sweep_timer is not None:
             self._sweep_timer.cancel()
             self._sweep_timer = None
-            cmd = Twist()
-            self._cmd_vel_pub.publish(cmd)
-        self._cancel_nav_goal()
+            # (Was `cmd = Twist()` — shadowed the command string and the
+            # Twist went out on the query topic. Latent because the sweep
+            # is disabled by default.)
+            self._cmd_vel_pub.publish(Twist())
+
+        # A search belonging to the PREVIOUS command dies here; the new
+        # command decides for itself whether it needs one.
+        if self._search_label is not None:
+            self._clear_search("preempted by new command")
+
+        # ── Preemption (R02b unresolved #3) ──────────────────────────────
+        # Never race a new goal against an in-flight one: queue the
+        # command, cancel the goal, and dispatch when its terminal result
+        # arrives (_nav_result_cb) or the watchdog fires.
+        if self._nav_goal_handle is not None:
+            self._pending_cmd = cmd
+            self._publish_status(
+                "preempting in-flight goal, command queued: '%s'" % cmd)
+            self._cancel_nav_goal()
+            if self._preempt_timer is not None:
+                self._preempt_timer.cancel()
+            self._preempt_timer = self.create_timer(
+                self._preempt_watchdog_sec, self._preempt_watchdog)
+            return
+
+        self._dispatch_command(cmd)
+
+    def _dispatch_command(self, cmd: str) -> None:
         self._set_exploration(False)
         self._set_mode(Mode.SEMANTIC_QUERYING)
+        self._last_cmd = cmd
 
         fwd = String()
         fwd.data = cmd
         self._query_cmd_pub.publish(fwd)
         self._publish_status("forwarded command: '%s'" % cmd)
+
+    def _preempt_watchdog(self) -> None:
+        if self._preempt_timer is not None:
+            self._preempt_timer.cancel()
+            self._preempt_timer = None
+        if self._pending_cmd is not None:
+            cmd = self._pending_cmd
+            self._pending_cmd = None
+            self.get_logger().warn(
+                "[preempt] cancelled goal never reported terminal state — "
+                "dispatching queued command '%s' anyway" % cmd)
+            self._dispatch_command(cmd)
 
     def _query_result_cb(self, msg: SemanticQueryResult) -> None:
         if self._mode != Mode.SEMANTIC_QUERYING:
@@ -212,11 +335,133 @@ class CoordinatorNode(Node):
                 % (msg.object_id, msg.semantic_name,
                    msg.position.x, msg.position.y)
             )
+        elif msg.search_suggested and msg.search_label:
+            self._begin_search(msg.search_label, msg.query_text)
         else:
             self.get_logger().warn("Query failed: %s" % msg.status_message)
             self._set_mode(Mode.TARGET_FAILED)
             self._publish_status("query failed: %s" % msg.status_message)
             self._schedule_resume()
+
+    # ── Search link (Phase 2c) ────────────────────────────────────────────
+
+    def _publish_active_search(self, label: str) -> None:
+        msg = String()
+        msg.data = label
+        self._active_search_pub.publish(msg)
+
+    def _begin_search(self, label: str, query_text: str) -> None:
+        self._search_label = label
+        self._search_query = query_text or self._last_cmd
+        self._search_t0 = self.get_clock().now()
+        self._search_dist = 0.0
+        self._publish_active_search(label)
+        self._set_mode(Mode.SEARCHING)
+        self._set_exploration(True)
+        self.get_logger().info(
+            "[search] '%s' not in memory — injected into detect vocabulary, "
+            "exploration enabled (grace %.0fs, expl_complete=%s)"
+            % (label, self._search_grace, self._expl_complete))
+        self._publish_status(
+            "SEARCHING for '%s' — vocabulary injected, exploring" % label)
+        if self._search_check_timer is not None:
+            self._search_check_timer.cancel()
+        self._search_check_timer = self.create_timer(
+            5.0, self._search_check_tick)
+
+    def _clear_search(self, reason: str) -> None:
+        if self._search_label is None:
+            return
+        label = self._search_label
+        self._search_label = None
+        self._search_query = None
+        if self._search_check_timer is not None:
+            self._search_check_timer.cancel()
+            self._search_check_timer = None
+        self._publish_active_search("")
+        elapsed = 0.0
+        if self._search_t0 is not None:
+            elapsed = (self.get_clock().now() - self._search_t0).nanoseconds / 1e9
+        self.get_logger().info(
+            "[search] cleared '%s' (%s) — vocabulary restored; landmark, "
+            "if promoted, persists. search_elapsed=%.1fs mileage=%.2fm"
+            % (label, reason, elapsed, self._search_dist))
+
+    def _search_check_tick(self) -> None:
+        """Periodic SEARCHING watchdog: honors a latched exploration-
+        complete once the grace period has passed."""
+        if self._mode != Mode.SEARCHING:
+            return
+        if not self._expl_complete:
+            return
+        elapsed = (self.get_clock().now() - self._search_t0).nanoseconds / 1e9
+        if elapsed < self._search_grace:
+            return
+        self._search_not_found()
+
+    def _search_not_found(self) -> None:
+        label = self._search_label
+        elapsed = (self.get_clock().now() - self._search_t0).nanoseconds / 1e9
+        mileage = self._search_dist
+        self._clear_search("exploration complete, no landmark")
+        self.get_logger().warn(
+            "[search] TARGET NOT FOUND: '%s' — exploration complete, no "
+            "landmark promoted (searched %.1fs, %.2fm)"
+            % (label, elapsed, mileage))
+        self._set_mode(Mode.TARGET_FAILED)
+        self._publish_status(
+            "TARGET NOT FOUND: '%s' — exploration complete, nothing promoted"
+            % label)
+        self._schedule_resume()
+
+    def _landmark_cb(self, msg: Detection3DArray) -> None:
+        if self._mode != Mode.SEARCHING or self._search_label is None:
+            return
+        hit = None
+        for det in msg.detections:
+            if det.results and \
+                    det.results[0].hypothesis.class_id == self._search_label:
+                hit = det
+                break
+        if hit is None:
+            return
+        elapsed = (self.get_clock().now() - self._search_t0).nanoseconds / 1e9
+        self.get_logger().info(
+            "[search] FOUND '%s' → %s at (%.2f, %.2f) n=%.0f after %.1fs, "
+            "%.2fm explored — pausing exploration, re-running query"
+            % (self._search_label, hit.id,
+               hit.bbox.center.position.x, hit.bbox.center.position.y,
+               hit.results[0].hypothesis.score, elapsed, self._search_dist))
+        self._set_exploration(False)
+        # Injection stays live until the navigation terminal state
+        # (constraint: clear vocabulary after arrival) so the approach
+        # keeps refining the landmark.
+        query = self._search_query
+        self._set_mode(Mode.SEMANTIC_QUERYING)
+        fwd = String()
+        fwd.data = query
+        self._query_cmd_pub.publish(fwd)
+        self._publish_status(
+            "search found %s — re-forwarded query '%s'" % (hit.id, query))
+
+    def _expl_complete_cb(self, msg: Bool) -> None:
+        if msg.data == self._expl_complete:
+            return
+        self._expl_complete = msg.data
+        self.get_logger().info(
+            "[exploration] complete=%s (from goal_assignment)" % msg.data)
+        # The periodic _search_check_tick handles SEARCHING: it applies
+        # the grace window uniformly whether the signal was latched
+        # before the search or arrived during it.
+
+    def _odom_cb(self, msg: Odometry) -> None:
+        x = msg.pose.pose.position.x
+        y = msg.pose.pose.position.y
+        if self._last_odom_xy is not None and self._mode == Mode.SEARCHING:
+            dx = x - self._last_odom_xy[0]
+            dy = y - self._last_odom_xy[1]
+            self._search_dist += (dx * dx + dy * dy) ** 0.5
+        self._last_odom_xy = (x, y)
 
     def _goal_pose_cb(self, msg: PoseStamped) -> None:
         if self._mode != Mode.SEMANTIC_NAV:
@@ -293,6 +538,26 @@ class CoordinatorNode(Node):
             self._nav_timeout_timer = None
 
         self._nav_goal_handle = None
+
+        # ── Preemption hand-off ──────────────────────────────────────────
+        # A queued command waits for exactly this: the cancelled goal's
+        # terminal result. Dispatch it now; the old goal's ABORTED /
+        # CANCELED status must not turn into TARGET_FAILED.
+        if self._pending_cmd is not None:
+            if self._preempt_timer is not None:
+                self._preempt_timer.cancel()
+                self._preempt_timer = None
+            cmd = self._pending_cmd
+            self._pending_cmd = None
+            try:
+                status = future.result().status
+            except Exception:  # noqa: BLE001 — dispatch regardless
+                status = -1
+            self.get_logger().info(
+                "[preempt] old goal terminal (status=%d) — dispatching "
+                "queued command '%s'" % (status, cmd))
+            self._dispatch_command(cmd)
+            return
 
         if self._mode != Mode.SEMANTIC_NAV:
             return
@@ -372,6 +637,14 @@ class CoordinatorNode(Node):
     # ── Resume exploration ────────────────────────────────────────────────
 
     def _schedule_resume(self) -> None:
+        # Terminal-state choke point: every REACHED/FAILED path funnels
+        # through here, so this is where a still-active search injection
+        # is cleared (constraint: vocabulary cleared after arrival; the
+        # landmark persists).
+        if self._search_label is not None and self._mode in (
+                Mode.TARGET_REACHED, Mode.TARGET_FAILED):
+            self._clear_search("navigation terminal: %s" % self._mode.name)
+
         if not self._auto_resume:
             self.get_logger().info(
                 "Auto-resume disabled, staying in %s" % self._mode.name)

@@ -104,6 +104,59 @@ _FILLER = frozenset({
 # "person number 3", "person no 5"). Skipped while scanning for the index.
 _INDEX_FILLER = frozenset({"number", "no", "num"})
 
+# ── Open-vocabulary expression extraction (Phase 2c search link) ──────────
+#
+# Words that may LEAD a navigation command before the target expression
+# starts. Deliberately a separate set from _FILLER: these are only
+# stripped from the FRONT of the command, so interior words of the
+# expression survive ("go to the box on the armchair" keeps its interior
+# "the"/"on"). The articles are in this set on purpose — stripping the
+# LEADING article is the de-articling rule the R02b experiment-d retrial
+# measured (leading "the" made /detect expression output unstable;
+# re-verified live on person-world frames in R02c §2.1 before this
+# shipped).
+_ARTICLES = frozenset({"the", "a", "an"})
+_COMMAND_PREFIX = frozenset({
+    "go", "to", "please", "navigate", "approach", "find", "me", "take",
+    "bring", "get", "can", "you", "i", "want", "need", "would", "like",
+    "could", "help", "with", "drive", "move", "head", "locate", "search",
+    "for", "reach", "visit", "us",
+}) | _ARTICLES
+
+# Politeness tail that may FOLLOW the expression ("find the bicycle
+# please"). Stripped from the back only.
+_COMMAND_SUFFIX = frozenset({"please", "now", "thanks", "thank", "you"})
+
+
+def extract_expression(text: str) -> Optional[str]:
+    """Extract the open-vocabulary target expression from a command.
+
+    Used when `parse_command` found no registry target: the remainder of
+    the command becomes the expression injected verbatim into the detect
+    vocabulary (and the detector_label its landmark will carry).
+
+    Returns None unless the command LOOKS like a navigation command —
+    at least one `_COMMAND_PREFIX` token must have been stripped from the
+    front. This keeps arbitrary chatter ("hello robot") from starting an
+    exploration run, while "go to the bicycle" / "find bicycle" work.
+
+        "go to the blue chair"      -> "blue chair"
+        "find the bicycle please"   -> "bicycle"
+        "go to the box on the sofa" -> "box on the sofa"   (interior words kept)
+        "hello robot"               -> None                (no command prefix)
+    """
+    tokens = _normalize(text).split()
+    i = 0
+    while i < len(tokens) and tokens[i] in _COMMAND_PREFIX:
+        i += 1
+    if i == 0:
+        return None
+    j = len(tokens)
+    while j > i and tokens[j - 1] in _COMMAND_SUFFIX:
+        j -= 1
+    expression = " ".join(tokens[i:j])
+    return expression or None
+
 _PHRASE_ALIASES: dict[str, str] = {
     "bench": "table",
     "stop sign": "stop_sign",

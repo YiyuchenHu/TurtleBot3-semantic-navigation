@@ -42,7 +42,7 @@ from visualization_msgs.msg import Marker, MarkerArray
 from vision_msgs.msg import Detection3DArray
 from nav_msgs.msg import OccupancyGrid
 from geometry_msgs.msg import PointStamped
-from std_msgs.msg import ColorRGBA
+from std_msgs.msg import ColorRGBA, String
 
 import tf2_ros
 import tf2_geometry_msgs  # noqa: F401
@@ -449,6 +449,17 @@ class SemanticMapMemoryNode(Node):
         self.declare_parameter("person_min_observations", 3)
         self.declare_parameter("bench_min_observations", 4)
         self.declare_parameter("stop_sign_min_observations", 5)
+        # ── Search link (Phase 2c) ───────────────────────────────────
+        # While /active_search carries an expression, candidates of that
+        # class promote at this threshold instead of the generic
+        # fallback. Rationale: a searched class is being actively
+        # confirmed by the coordinator (nav goal only after promotion),
+        # and exploration may pass the object exactly once — the generic
+        # 8 was measured (R02b §5.1) to let sparse-view candidates
+        # expire at 7/8. 5 still filters the run-1 ghost pattern
+        # (3 stray observations).
+        self.declare_parameter("search_min_observations", 5)
+        self.declare_parameter("active_search_topic", "/active_search")
         self.declare_parameter("geometry_check_enabled", True)
         self.declare_parameter("geometry_check_radius_cells", 12)
         self.declare_parameter("person_max_islands", 2)
@@ -495,6 +506,9 @@ class SemanticMapMemoryNode(Node):
             "bench": self.get_parameter("bench_min_observations").value,
             "stop sign": self.get_parameter("stop_sign_min_observations").value,
         }
+        self._search_min_obs = int(
+            self.get_parameter("search_min_observations").value)
+        self._search_label = None  # active /active_search expression
 
         self._geom_enabled = self.get_parameter("geometry_check_enabled").value
         self._geom_radius = self.get_parameter("geometry_check_radius_cells").value
@@ -520,6 +534,13 @@ class SemanticMapMemoryNode(Node):
 
         self.create_subscription(Detection3DArray, in_topic, self._obs_cb, qos_rel)
         self.create_subscription(OccupancyGrid, map_topic, self._map_cb, qos_map)
+        # Latched, same QoS as the coordinator's publisher: the active
+        # search expression (empty = none) survives node start order.
+        qos_search = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
+                                durability=DurabilityPolicy.TRANSIENT_LOCAL)
+        self.create_subscription(
+            String, self.get_parameter("active_search_topic").value,
+            self._search_cb, qos_search)
         self._pub = self.create_publisher(MarkerArray, out_topic, qos_rel)
 
         lm_obj_topic = self.get_parameter("landmark_objects_topic").value
@@ -563,6 +584,29 @@ class SemanticMapMemoryNode(Node):
             % (self._merge_d, self._cand_d, self._min_obs,
                self._search_r, self._wall_margin_m, self._min_island,
                "on" if self._relabel_enabled else "off", self._relabel_ratio))
+
+    def _search_cb(self, msg):
+        label = msg.data.strip().lower() or None
+        if label == self._search_label:
+            return
+        self._search_label = label
+        if label:
+            self.get_logger().info(
+                "[search] active search class '%s' — promotion threshold %d "
+                "(instead of %d)" % (label, self._search_min_obs,
+                                     self._class_min_obs.get(label, self._min_obs)))
+        else:
+            self.get_logger().info(
+                "[search] search class cleared — thresholds back to normal")
+
+    def _min_obs_for(self, label):
+        """Promotion threshold for `label`, honoring an active search.
+
+        The search override applies only while the expression is active;
+        an already-promoted landmark is never demoted when it ends."""
+        if self._search_label is not None and label == self._search_label:
+            return self._search_min_obs
+        return self._class_min_obs.get(label, self._min_obs)
 
     def _map_cb(self, msg):
         self._map_width = msg.info.width
@@ -711,7 +755,7 @@ class SemanticMapMemoryNode(Node):
             if matched_cand is not None:
                 d_c = math.hypot(matched_cand.x - rx, matched_cand.y - ry)
                 self._update_candidate(matched_cand, rx, ry, now)
-                class_min_obs = self._class_min_obs.get(label, self._min_obs)
+                class_min_obs = self._min_obs_for(label)
                 self._note("merge_candidate", label,
                            "n=%d/%d d=%.2f pos=(%.2f,%.2f) id=%s"
                            % (matched_cand.obs_count, class_min_obs, d_c,
@@ -920,7 +964,7 @@ class SemanticMapMemoryNode(Node):
         # expires one or two observations short is the signature this
         # summary exists to expose.
         for c in expired:
-            need = self._class_min_obs.get(c.semantic_class, self._min_obs)
+            need = self._min_obs_for(c.semantic_class)
             self._stat_expired[c.semantic_class] += 1
             self._stat_expired_max_n[c.semantic_class] = max(
                 self._stat_expired_max_n[c.semantic_class], c.obs_count)
@@ -984,7 +1028,7 @@ class SemanticMapMemoryNode(Node):
             lines.append("  candidates: " + " | ".join(
                 "%s n=%d/%d age=%.0fs (%.2f,%.2f)"
                 % (c.semantic_class, c.obs_count,
-                   self._class_min_obs.get(c.semantic_class, self._min_obs),
+                   self._min_obs_for(c.semantic_class),
                    now - c.last_seen, c.x, c.y)
                 for c in self._candidates))
         if self._landmarks:

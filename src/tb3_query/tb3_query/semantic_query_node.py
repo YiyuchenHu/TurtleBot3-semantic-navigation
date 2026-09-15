@@ -41,6 +41,7 @@ from ament_index_python.packages import get_package_share_directory
 
 from tb3_query.query_core import (
     MemoryObject,
+    extract_expression,
     load_target_mapping,
     parse_command,
     select_target,
@@ -142,34 +143,61 @@ class SemanticQueryNode(Node):
         parsed = parse_command(raw, self._known_targets)
 
         if parsed is None:
-            self._publish_failure(
-                raw, "", "",
-                f"unsupported semantic target in: '{raw}' "
-                f"(known: {sorted(self._known_targets)})"
-            )
-            return
-
-        semantic_name = parsed.semantic_name
-        detector_label = self._sem2det.get(semantic_name, "")
-        if not detector_label:
-            self._publish_failure(
-                raw, semantic_name, "",
-                f"no detector_label mapping for '{semantic_name}'"
-            )
-            return
-
-        if parsed.desired_index is not None:
+            # ── Open-vocabulary path (Phase 2c search link) ──────────────
+            # Not a registry target. If the text still reads as a
+            # navigation command, the remainder becomes a free-form
+            # expression: resolve it against memory by literal label
+            # (search-promoted landmarks carry the expression as their
+            # class), else suggest a vocabulary-injection search.
+            expression = extract_expression(raw)
+            if expression is None:
+                self._publish_failure(
+                    raw, "", "",
+                    f"unsupported semantic target in: '{raw}' "
+                    f"(known: {sorted(self._known_targets)})"
+                )
+                return
+            semantic_name = expression
+            detector_label = expression
+            desired_index = None
             self.get_logger().info(
-                "Parsed: semantic='%s'  desired_index=%d"
-                % (semantic_name, parsed.desired_index)
-            )
+                "Open-vocabulary expression: '%s'" % expression)
+        else:
+            semantic_name = parsed.semantic_name
+            detector_label = self._sem2det.get(semantic_name, "")
+            if not detector_label:
+                self._publish_failure(
+                    raw, semantic_name, "",
+                    f"no detector_label mapping for '{semantic_name}'"
+                )
+                return
+            desired_index = parsed.desired_index
+            if desired_index is not None:
+                self.get_logger().info(
+                    "Parsed: semantic='%s'  desired_index=%d"
+                    % (semantic_name, desired_index)
+                )
 
         result = select_target(
             self._memory_objects,
             semantic_name,
             detector_label,
             raw,
-            desired_index=parsed.desired_index,
+            desired_index=desired_index,
+        )
+
+        # ── Search suggestion (Phase 2c) ─────────────────────────────────
+        # The class has NO landmark at all and no specific index was
+        # requested → the coordinator can inject `detector_label` into the
+        # detect vocabulary and explore. With an index ("go to person 3")
+        # a search could not resolve WHICH instance, so it stays a plain
+        # failure. When landmarks exist, select_target already resolved
+        # per memory (nearest / by index) and no search is suggested.
+        search_suggested = (
+            not result.success
+            and desired_index is None
+            and not any(o.detector_label == detector_label
+                        for o in self._memory_objects)
         )
 
         out = SemanticQueryResult()
@@ -184,6 +212,8 @@ class SemanticQueryNode(Node):
         out.frame_id = self._out_frame
         out.confidence = float(result.confidence)
         out.status_message = result.status_message
+        out.search_suggested = search_suggested
+        out.search_label = detector_label if search_suggested else ""
 
         self._result_pub.publish(out)
 
@@ -196,6 +226,10 @@ class SemanticQueryNode(Node):
                 "Query OK: %s → %s at (%.2f, %.2f)"
                 % (semantic_name, result.object_id, result.x, result.y)
             )
+        elif search_suggested:
+            self.get_logger().info(
+                "Query MISS with search suggestion: inject '%s' "
+                "into the detect vocabulary" % detector_label)
         else:
             self.get_logger().warn("Query FAILED: %s" % result.status_message)
 

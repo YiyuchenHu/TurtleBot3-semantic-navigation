@@ -192,6 +192,14 @@ public:
           exploration_enabled_ ? "ENABLED" : "DISABLED");
       });
 
+    // Phase 2c search link: the coordinator's SEARCHING state needs to
+    // know when the scan is finished to declare NOT FOUND. Latched
+    // (transient_local) so a coordinator that starts or re-enters the
+    // decision late still sees the current value.
+    exploration_complete_pub_ = create_publisher<std_msgs::msg::Bool>(
+      "exploration_complete", rclcpp::QoS(1).transient_local());
+    publishExplorationComplete(false);
+
     double rate_hz = get_parameter("rate").as_double();
     timer_ = create_wall_timer(
       std::chrono::duration<double>(1.0 / rate_hz),
@@ -287,6 +295,7 @@ private:
           msg->poses.size());
         exploration_complete_ = false;
         idle_tick_streak_ = 0;
+        publishExplorationComplete(false);
       }
     }
   }
@@ -683,10 +692,18 @@ private:
    * Idempotent: subsequent calls do nothing while `exploration_complete_`
    * is already true.
    */
+  void publishExplorationComplete(bool complete)
+  {
+    std_msgs::msg::Bool msg;
+    msg.data = complete;
+    exploration_complete_pub_->publish(msg);
+  }
+
   void declareExplorationComplete(const std::string & frame_id)
   {
     if (exploration_complete_) return;
     exploration_complete_ = true;
+    publishExplorationComplete(true);
 
     const std::string policy =
       get_parameter("on_exploration_complete").as_string();
@@ -1051,6 +1068,7 @@ private:
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr warmup_sub_;
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr exploration_enabled_sub_;
+  rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr exploration_complete_pub_;
   rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr costmap_sub_;
   bool exploration_enabled_{true};
   rclcpp_action::Client<NavigateToPose>::SharedPtr nav_client_;
