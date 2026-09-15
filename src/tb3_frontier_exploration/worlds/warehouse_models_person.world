@@ -65,6 +65,17 @@
 <sdf version="1.6">
   <world name="warehouse_models_person">
 
+    <!-- Recording view: top-down user camera at load time. The same pose
+         lives in docker/gazebo_gui.ini's [camera] section, but Gazebo
+         Classic 11 ignores gui.ini camera poses (verified in R02a) while
+         it does honor this <gui> block — so demo recordings no longer
+         need the view set by hand. -->
+    <gui>
+      <camera name="user_camera">
+        <pose>0.0 -1.2 10.5 0 1.35 1.5708</pose>
+      </camera>
+    </gui>
+
     <!-- Standard lighting -->
     <include>
       <uri>model://sun</uri>

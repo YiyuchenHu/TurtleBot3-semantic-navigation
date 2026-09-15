@@ -64,10 +64,16 @@ semantic_map_memory_node:
 
     # ── Promotion ──────────────────────────────────────────
     # Generic fallback (any class without a class-specific override
-    # below uses this). Kept at 3 because most non-person classes
-    # (table, stop_sign) appear once per world and small numbers are
-    # fine.
-    min_observations:         3
+    # below uses this). Raised 3 → 8 in Phase 2b for the same reason
+    # person went 3 → 8 in the course repo: with the LocateAnything
+    # vocabulary the fallback governs the open-vocabulary classes
+    # (bookshelf / trash can / traffic cone), and at 3 a run-1 ghost
+    # ("traffic cone_3", 3 stray mislocalized observations) became a
+    # permanent landmark that "go to the cone" then navigated to. Real
+    # objects accumulate n=15+ within one exploration pass, so 8 costs
+    # only promotion latency. The YOLO path is unaffected: person /
+    # bench / stop sign all have explicit overrides below.
+    min_observations:         8
 
     # ── Obstacle island search ─────────────────────────────
     # Search window radius in grid cells around the observation.

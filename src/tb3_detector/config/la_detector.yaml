@@ -33,6 +33,16 @@ la_detector_node:
     # make fast-rotation detections land on the wrong obstacle.
     max_angular_vel: 0.5
 
+    # ── Bearing-occlusion filter ───────────────────────────
+    # Drop a detection whose bbox centre column is spanned by a NEARER
+    # detection of another class (nearer = bottom edge >=8 px lower;
+    # everything here stands on the floor). The planar localizer casts
+    # the scan ray at the centre column, so such detections are
+    # guaranteed to be localized onto the occluder — run 1 measured the
+    # cone behind the centre person planting a fake "traffic cone"
+    # landmark on the person this way (R02b §4).
+    occlusion_filter: true
+
     # ── Cross-class dedup ──────────────────────────────────
     # The model can list one physical object under several vocabulary
     # entries (R01 §2.3: armchair/chair cross-listing). Two boxes of

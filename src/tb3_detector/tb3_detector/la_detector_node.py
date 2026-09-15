@@ -58,6 +58,41 @@ def iou_xyxy(a: list[float], b: list[float]) -> float:
     return inter / max(area_a + area_b - inter, 1e-9)
 
 
+def filter_bearing_occluded(dets: list[dict],
+                            min_bottom_gap_px: float = 8.0
+                            ) -> tuple[list[dict], int]:
+    """Drop detections the planar localizer is guaranteed to mislocate.
+
+    The localizer turns a bbox into (x, y) by casting the scan ray at the
+    bbox CENTRE column — so when a farther object D is seen past a nearer
+    object E (their image columns overlap), the ray hits E and D's
+    observation lands on E's position. Observed live in run 1: the cone
+    behind the centre person (seen from the west) and the bookshelf
+    behind the same person (seen from the south) each planted hundreds of
+    wrong-label observations on the person, promoting fake landmarks.
+
+    Rule: drop D if some other-class detection E spans D's centre column
+    and E's bottom edge is at least `min_bottom_gap_px` lower (both
+    classes stand on the floor, so a lower bottom edge means nearer).
+    """
+    kept: list[dict] = []
+    dropped = 0
+    for d in dets:
+        x1, _y1, x2, y2 = d["bbox_xyxy"]
+        u = (x1 + x2) / 2.0
+        occluded = any(
+            e is not d and e["label"] != d["label"]
+            and e["bbox_xyxy"][0] <= u <= e["bbox_xyxy"][2]
+            and e["bbox_xyxy"][3] - y2 >= min_bottom_gap_px
+            for e in dets
+        )
+        if occluded:
+            dropped += 1
+        else:
+            kept.append(d)
+    return kept, dropped
+
+
 def dedup_cross_class(dets: list[dict], priority: dict[str, int],
                       iou_threshold: float) -> tuple[list[dict], int]:
     """Collapse overlapping boxes of DIFFERENT labels onto the label with
@@ -93,6 +128,7 @@ class LaDetectorNode(Node):
         self.declare_parameter("min_interval_sec", 0.3)
         self.declare_parameter("max_angular_vel", 0.5)
         self.declare_parameter("cross_class_iou", 0.8)
+        self.declare_parameter("occlusion_filter", True)
         self.declare_parameter("image_topic", "/camera/image_raw")
         self.declare_parameter("odom_topic", "/odom")
         self.declare_parameter("detections_topic", "/detector_node/detections")
@@ -110,6 +146,7 @@ class LaDetectorNode(Node):
         self._min_interval = float(g("min_interval_sec"))
         self._max_ang_vel = float(g("max_angular_vel"))
         self._cross_iou = float(g("cross_class_iou"))
+        self._occlusion_filter = bool(g("occlusion_filter"))
         self._pub_debug = bool(g("publish_debug_image"))
         self._jpeg_quality = int(g("jpeg_quality"))
         queue = int(g("queue_size"))
@@ -127,7 +164,8 @@ class LaDetectorNode(Node):
         # /detect latency and cross-class dedup count).
         self._st = dict(frames=0, skipped_interval=0, skipped_spin=0,
                         requests=0, errors=0, dedup_dropped=0,
-                        lat_sum=0.0, lat_max=0.0, det_counts={})
+                        occl_dropped=0, lat_sum=0.0, lat_max=0.0,
+                        det_counts={})
         self._last_stats_wall = time.monotonic()
 
         sensor_qos = QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT,
@@ -190,6 +228,9 @@ class LaDetectorNode(Node):
 
         dets = [d for d in result.get("detections", [])
                 if d.get("label") in self._priority]
+        if self._occlusion_filter:
+            dets, occl = filter_bearing_occluded(dets)
+            self._st["occl_dropped"] += occl
         dets, dropped = dedup_cross_class(dets, self._priority, self._cross_iou)
         self._st["dedup_dropped"] += dropped
         for d in dets:
@@ -303,10 +344,10 @@ class LaDetectorNode(Node):
         self.get_logger().info(
             "[la_stats] frames=%d requests=%d errors=%d "
             "skipped(interval=%d, spin=%d) latency(avg=%.0fms, max=%.0fms) "
-            "dedup_dropped=%d detections=%s"
+            "dedup_dropped=%d occlusion_dropped=%d detections=%s"
             % (s["frames"], s["requests"], s["errors"], s["skipped_interval"],
                s["skipped_spin"], avg, s["lat_max"], s["dedup_dropped"],
-               s["det_counts"]))
+               s["occl_dropped"], s["det_counts"]))
 
 
 def main(args=None):
