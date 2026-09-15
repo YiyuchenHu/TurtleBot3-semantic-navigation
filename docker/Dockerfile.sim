@@ -102,6 +102,19 @@ RUN pip3 install --no-cache-dir \
     && python3 -c "import numpy; assert numpy.__version__.startswith('1.'), numpy.__version__; print('numpy', numpy.__version__)" \
     && python3 -c "import ultralytics; print('ultralytics', ultralytics.__version__)"
 
+# ── jersey_barrier (R05) ─────────────────────────────────────────────────
+# Fifth world object, registry class "traffic barrier". Its own layer,
+# placed AFTER the heavy pip layer on purpose: adding a model must not
+# invalidate the cached torch download above.
+RUN set -e; \
+    git clone --depth 1 --filter=blob:none --sparse \
+        https://github.com/osrf/gazebo_models /tmp/gm; \
+    git -C /tmp/gm sparse-checkout set jersey_barrier; \
+    cp -r /tmp/gm/jersey_barrier /opt/gazebo_models/; \
+    rm -rf /tmp/gm; \
+    test -f /opt/gazebo_models/jersey_barrier/model.sdf; \
+    test -f /opt/gazebo_models/jersey_barrier/model.config
+
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 

@@ -207,6 +207,9 @@ _PHRASE_ALIASES: dict[str, str] = {
     "traffic cone": "cone",
     "construction cone": "cone",
     "shelf": "bookshelf",
+    "traffic barrier": "traffic_barrier",
+    "jersey barrier": "traffic_barrier",
+    "barrier": "traffic_barrier",
 }
 
 

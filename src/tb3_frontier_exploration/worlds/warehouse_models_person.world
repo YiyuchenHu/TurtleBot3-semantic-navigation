@@ -186,22 +186,24 @@
       <pose>2.0 2.0 0 0 0 -2.3562</pose>
     </include>
 
-    <!-- NW corner: plain (white shirt). The green-shirt variant was
+    <!-- NW area: plain (white shirt). The green-shirt variant was
          first placed here (R04) but corner placement starved the search:
          exploration rarely faces a corner from <2.5 m (the memory range
          gate), so promotion never reached n=5. Green now lives at the
-         centre. -->
+         centre. R05: pulled in from the (-2, 2) corner — the jersey
+         barrier along the west wall spans y ±2.03 at x ≤ -2.15, which
+         overlaps the old corner spots. -->
     <include>
       <uri>model://person_standing</uri>
       <name>person_corner_nw</name>
-      <pose>-2.0 2.0 0 0 0 -0.7854</pose>
+      <pose>-1.2 1.8 0 0 0 -0.7854</pose>
     </include>
 
-    <!-- SW corner: plain (white shirt) -->
+    <!-- SW area: plain (white shirt). R05: moved with person_corner_nw. -->
     <include>
       <uri>model://person_standing</uri>
       <name>person_corner_sw</name>
-      <pose>-2.0 -2.0 0 0 0 0.7854</pose>
+      <pose>-1.2 -1.8 0 0 0 0.7854</pose>
     </include>
 
     <!-- SE corner: red shirt -->
@@ -256,6 +258,19 @@
       <name>cone_east</name>
       <static>true</static>
       <pose>2.4 0.0 0 0 0 0</pose>
+    </include>
+
+    <!-- West wall: jersey barrier (R05, registry class "traffic
+         barrier"). The model is 4.07 x 0.81 m, so along the west wall
+         (yaw 90°) it spans y in [-2.03, 2.03] at x in [-2.96, -2.15];
+         the two white-shirt persons were pulled off the west corners to
+         make room (see above). Baked into the sim image from osrf
+         gazebo_models like the other four objects (docker/Dockerfile.sim). -->
+    <include>
+      <uri>model://jersey_barrier</uri>
+      <name>barrier_west</name>
+      <static>true</static>
+      <pose>-2.55 0.0 0 0 0 1.5708</pose>
     </include>
 
   </world>

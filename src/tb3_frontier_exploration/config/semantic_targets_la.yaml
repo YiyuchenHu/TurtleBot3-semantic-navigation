@@ -55,3 +55,17 @@ semantic_targets:
       East mid-wall, orange construction cone. Not a COCO class.
       Users can say "go to the cone" (single token) or
       "go to the traffic cone" / "construction cone" (aliases).
+
+  - semantic_name:   "traffic_barrier"
+    detector_label:  "concrete barrier"
+    gazebo_model:    "jersey_barrier"
+    enabled:         true
+    notes: >
+      R05: jersey barrier along the west wall (4.07 m long). Not a
+      COCO class. Reached via the "traffic barrier" / "jersey
+      barrier" / "barrier" phrase aliases in query_core.
+      detector_label is "concrete barrier", NOT "traffic barrier":
+      offline probe (reports/R05_probe/) got 0/60 frames with
+      "traffic barrier" but correct boxes with "concrete barrier" /
+      "jersey barrier" / "barrier" — 词表即真理 cuts both ways, the
+      label must be a phrase the model actually grounds.
