@@ -22,7 +22,32 @@ la_detector_node:
     #     (the query side resolves user commands against that file).
     # Order matters: it is the priority order for cross-class
     # deduplication (earlier wins).
-    vocabulary: ["person", "bookshelf", "trash can", "traffic cone"]
+    #
+    # Phase 2c: shrunk to ["person"] — every other class is now an
+    # OPEN-VOCABULARY target discovered on demand by the search link
+    # (the coordinator injects the query expression via /active_search;
+    # the injected term is prepended, i.e. top dedup priority). The
+    # R02b 4-class mapping behavior is one param override away:
+    #   vocabulary: ["person", "bookshelf", "trash can", "traffic cone"]
+    vocabulary: ["person"]
+
+    # ── Search-link injection ──────────────────────────────
+    # Latched String from the coordinator: a free-form expression to
+    # detect IN ADDITION to the base vocabulary ('' = none).
+    active_search_topic: "/active_search"
+
+    # ── Coverage categories (requested, filtered on, NEVER published) ──
+    # R02c smoke run 1 measured what shrinking the vocabulary does: with
+    # ["person"] alone the occlusion filter went blind to the three
+    # world objects, a mislocalized box chain promoted a fake person at
+    # the trash can and at the bookshelf, and the cone collected enough
+    # forced-choice "trash can" boxes (n=5) that the search navigated
+    # to the wrong object. These categories ride along in every /detect
+    # request so the geometric safety nets (occlusion filter, same-
+    # object veto) see those objects again — but their boxes are
+    # dropped before publishing, so the classes never reach memory
+    # until a search injects them. Set [] to disable (pure open-world).
+    coverage_categories: ["bookshelf", "trash can", "traffic cone"]
 
     # ── Sampling ───────────────────────────────────────────
     # Server-side detect is ~0.2-0.3 s/frame (R01 §5.7); 0.3 s keeps at

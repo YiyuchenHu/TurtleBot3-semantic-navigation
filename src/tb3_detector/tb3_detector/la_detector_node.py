@@ -38,6 +38,7 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 
 from nav_msgs.msg import Odometry
 from sensor_msgs.msg import Image
+from std_msgs.msg import String
 from vision_msgs.msg import Detection2D, Detection2DArray, ObjectHypothesisWithPose
 
 import cv2
@@ -129,6 +130,16 @@ class LaDetectorNode(Node):
         self.declare_parameter("max_angular_vel", 0.5)
         self.declare_parameter("cross_class_iou", 0.8)
         self.declare_parameter("occlusion_filter", True)
+        self.declare_parameter("active_search_topic", "/active_search")
+        # Coverage categories: requested from the model and used for the
+        # occlusion filter and same-object veto, but NEVER published —
+        # they keep the geometric safety nets sighted without putting
+        # the classes into the mapping vocabulary (R02c smoke run 1
+        # post-mortem: with vocabulary ["person"] alone, both fake
+        # landmarks were caused by boxes the filters could no longer
+        # see).
+        self.declare_parameter("coverage_categories",
+                               ["bookshelf", "trash can", "traffic cone"])
         self.declare_parameter("image_topic", "/camera/image_raw")
         self.declare_parameter("odom_topic", "/odom")
         self.declare_parameter("detections_topic", "/detector_node/detections")
@@ -141,8 +152,19 @@ class LaDetectorNode(Node):
         g = lambda n: self.get_parameter(n).value  # noqa: E731
         self._server_url = str(g("server_url")).rstrip("/")
         self._timeout = float(g("request_timeout_sec"))
-        self._vocabulary = [str(v) for v in g("vocabulary") if str(v).strip()]
-        self._priority = {v: i for i, v in enumerate(self._vocabulary)}
+        self._base_vocabulary = [str(v) for v in g("vocabulary") if str(v).strip()]
+        # ── Search-link injection (Phase 2c) ────────────────────────────
+        # /active_search carries one free-form expression (empty = none).
+        # While active it is PREPENDED to the vocabulary, so it holds the
+        # highest cross-class dedup priority — an overlapping box keeps
+        # the search label, never a base-vocabulary one.
+        self._search_term: str | None = None
+        self._coverage_base = [str(v).lower() for v in g("coverage_categories")
+                               if str(v).strip()]
+        self._vocabulary: list[str] = []
+        self._priority: dict[str, int] = {}
+        self._coverage: list[str] = []
+        self._rebuild_vocabulary()
         self._min_interval = float(g("min_interval_sec"))
         self._max_ang_vel = float(g("max_angular_vel"))
         self._cross_iou = float(g("cross_class_iou"))
@@ -152,7 +174,7 @@ class LaDetectorNode(Node):
         queue = int(g("queue_size"))
         self._stats_interval = float(g("stats_interval_sec"))
 
-        if not self._vocabulary:
+        if not self._base_vocabulary:
             raise ValueError("la_detector_node: vocabulary must not be empty")
 
         self._bridge = CvBridge()
@@ -164,8 +186,8 @@ class LaDetectorNode(Node):
         # /detect latency and cross-class dedup count).
         self._st = dict(frames=0, skipped_interval=0, skipped_spin=0,
                         requests=0, errors=0, dedup_dropped=0,
-                        occl_dropped=0, lat_sum=0.0, lat_max=0.0,
-                        det_counts={})
+                        occl_dropped=0, cover_vetoed=0, lat_sum=0.0,
+                        lat_max=0.0, det_counts={}, cover_counts={})
         self._last_stats_wall = time.monotonic()
 
         sensor_qos = QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT,
@@ -177,6 +199,13 @@ class LaDetectorNode(Node):
                                  self._image_cb, sensor_qos)
         self.create_subscription(Odometry, str(g("odom_topic")),
                                  self._odom_cb, sensor_qos)
+        # Latched: a term published before this node (re)starts still
+        # arrives. The coordinator is the only publisher.
+        search_qos = QoSProfile(reliability=ReliabilityPolicy.RELIABLE,
+                                durability=DurabilityPolicy.TRANSIENT_LOCAL,
+                                depth=1)
+        self.create_subscription(String, str(g("active_search_topic")),
+                                 self._search_cb, search_qos)
         self._det_pub = self.create_publisher(
             Detection2DArray, str(g("detections_topic")), reliable_qos)
         self._dbg_pub = (self.create_publisher(
@@ -189,6 +218,44 @@ class LaDetectorNode(Node):
             "min_interval=%.2fs max_ang_vel=%.2frad/s cross_iou=%.2f"
             % (self._server_url, self._vocabulary, self._min_interval,
                self._max_ang_vel, self._cross_iou))
+
+    # ── Search-link vocabulary injection ────────────────────────────────
+
+    def _rebuild_vocabulary(self) -> None:
+        """Recompute the effective vocabulary and dedup priorities.
+
+        The search term (if any) goes FIRST: index 0 is the best (lowest)
+        priority in dedup_cross_class, so a search-term box always wins a
+        cross-class overlap against base-vocabulary boxes (Phase 2c
+        constraint a). A term that equals a base word is not duplicated.
+        """
+        base = self._base_vocabulary
+        if self._search_term and self._search_term not in base:
+            self._vocabulary = [self._search_term] + base
+        else:
+            self._vocabulary = list(base)
+        self._priority = {v: i for i, v in enumerate(self._vocabulary)}
+        # Coverage = configured coverage minus anything that is being
+        # published anyway (base vocab or the active search term — a
+        # searched class must not veto itself).
+        self._coverage = [c for c in self._coverage_base
+                          if c not in self._priority]
+
+    def _search_cb(self, msg: String) -> None:
+        term = msg.data.strip().lower() or None
+        if term == self._search_term:
+            return
+        old = self._search_term
+        self._search_term = term
+        self._rebuild_vocabulary()
+        if term:
+            self.get_logger().info(
+                "[search] vocabulary injected: '%s' (top dedup priority) "
+                "→ categories=%s" % (term, self._vocabulary))
+        else:
+            self.get_logger().info(
+                "[search] vocabulary cleared (was '%s') → categories=%s"
+                % (old, self._vocabulary))
 
     # ── Callbacks ───────────────────────────────────────────────────────
 
@@ -226,20 +293,46 @@ class LaDetectorNode(Node):
         self._st["lat_sum"] += rtt_ms
         self._st["lat_max"] = max(self._st["lat_max"], rtt_ms)
 
-        dets = [d for d in result.get("detections", [])
-                if d.get("label") in self._priority]
+        coverage = set(self._coverage)
+        all_dets = [d for d in result.get("detections", [])
+                    if d.get("label") in self._priority
+                    or d.get("label") in coverage]
+        # Occlusion filter runs over publishable AND coverage boxes: a
+        # nearer coverage object (e.g. the undetectable-by-vocabulary
+        # cone) still shields the scan column behind it.
         if self._occlusion_filter:
-            dets, occl = filter_bearing_occluded(dets)
+            all_dets, occl = filter_bearing_occluded(all_dets)
             self._st["occl_dropped"] += occl
+        cover_dets = [d for d in all_dets if d["label"] in coverage]
+        dets = [d for d in all_dets if d["label"] in self._priority]
+        # Coverage veto: a publishable box that is the SAME object as a
+        # coverage box (IoU >= cross_class_iou) is a forced-choice
+        # mislabel — the model also named it by its coverage class.
+        # R02c smoke run 1: the cone collecting "trash can" boxes this
+        # way promoted a fake landmark the search then navigated to.
+        if cover_dets:
+            kept = []
+            for d in dets:
+                clash = any(iou_xyxy(c["bbox_xyxy"], d["bbox_xyxy"])
+                            >= self._cross_iou for c in cover_dets)
+                if clash:
+                    self._st["cover_vetoed"] += 1
+                else:
+                    kept.append(d)
+            dets = kept
         dets, dropped = dedup_cross_class(dets, self._priority, self._cross_iou)
         self._st["dedup_dropped"] += dropped
         for d in dets:
             self._st["det_counts"][d["label"]] = \
                 self._st["det_counts"].get(d["label"], 0) + 1
+        for d in cover_dets:
+            self._st["cover_counts"][d["label"]] = \
+                self._st["cover_counts"].get(d["label"], 0) + 1
 
         self._det_pub.publish(self._to_msg(dets, msg.header))
         if self._dbg_pub is not None:
-            self._publish_debug(bgr, dets, rtt_ms, msg.header)
+            self._publish_debug(bgr, dets, rtt_ms, msg.header,
+                                cover_dets=cover_dets)
         self._maybe_log_stats()
 
     # ── HTTP ────────────────────────────────────────────────────────────
@@ -252,7 +345,7 @@ class LaDetectorNode(Node):
             return None
         payload = json.dumps({
             "image": base64.b64encode(buf.tobytes()).decode("ascii"),
-            "categories": self._vocabulary,
+            "categories": self._vocabulary + self._coverage,
         }).encode()
         req = urllib.request.Request(
             self._server_url + "/detect", data=payload,
@@ -316,8 +409,15 @@ class LaDetectorNode(Node):
         return msg
 
     def _publish_debug(self, bgr, dets: list[dict], rtt_ms: float,
-                       header) -> None:
+                       header, cover_dets: list[dict] | None = None) -> None:
         vis = bgr.copy()
+        for d in (cover_dets or []):
+            # Coverage boxes (never published): thin grey, for eyeballing
+            # what the veto/occlusion machinery can see.
+            x1, y1, x2, y2 = [int(v) for v in d["bbox_xyxy"]]
+            cv2.rectangle(vis, (x1, y1), (x2, y2), (140, 140, 140), 1)
+            cv2.putText(vis, "[%s]" % d["label"], (x1, min(y2 + 14, vis.shape[0] - 4)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, (140, 140, 140), 1)
         for d in dets:
             x1, y1, x2, y2 = [int(v) for v in d["bbox_xyxy"]]
             cv2.rectangle(vis, (x1, y1), (x2, y2), (255, 120, 0), 2)
@@ -344,10 +444,12 @@ class LaDetectorNode(Node):
         self.get_logger().info(
             "[la_stats] frames=%d requests=%d errors=%d "
             "skipped(interval=%d, spin=%d) latency(avg=%.0fms, max=%.0fms) "
-            "dedup_dropped=%d occlusion_dropped=%d detections=%s"
+            "dedup_dropped=%d occlusion_dropped=%d cover_vetoed=%d "
+            "search=%s detections=%s coverage=%s"
             % (s["frames"], s["requests"], s["errors"], s["skipped_interval"],
                s["skipped_spin"], avg, s["lat_max"], s["dedup_dropped"],
-               s["occl_dropped"], s["det_counts"]))
+               s["occl_dropped"], s["cover_vetoed"], repr(self._search_term),
+               s["det_counts"], s["cover_counts"]))
 
 
 def main(args=None):
