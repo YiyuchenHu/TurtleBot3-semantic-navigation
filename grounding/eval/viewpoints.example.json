@@ -1,0 +1,33 @@
+{
+  "_comment": "Robot viewpoints used to capture the eval frames in warehouse_aws_semantic.world (map/world frame; yaw_deg 0 = +X). These are the exact poses the shipped manifest bboxes were labeled from — re-labeling is needed if you capture from different poses. The robot must be STATIONARY when grabbing: either kill the motion nodes (goal_assignment, frontier_detection, bt_navigator, controller_server, behavior_server) and zero /cmd_vel, or grab before Nav2 starts. Teleport with: gz model -m waffle_pi -x X -y Y -z 0.01 -Y <yaw_rad>. Note the waffle_pi camera sits ~10 cm off the ground: a full-height person needs ~4 m of standoff to fit vertically.",
+  "chairs_front": {
+    "x": 3.0,
+    "y": 0.6,
+    "yaw_deg": -161,
+    "description": "Looking west: chair_red prominent left (~2.3 m), chair_blue right (~4.2 m), person_standing small at back-centre, box_blue_floor and the sofa corner at the far left edge."
+  },
+  "sofa_zone": {
+    "x": 0.2,
+    "y": 0.2,
+    "yaw_deg": -90,
+    "description": "Looking south at ~3 m: sofa_orange centred with box_blue_sofa on its seat, box_red on the floor at the left edge, box_blue_floor distractor at the right edge."
+  },
+  "shelf_aisle": {
+    "x": 0.3,
+    "y": -0.2,
+    "yaw_deg": 115,
+    "description": "Looking north-west: ShelfD rack with cardboard clutter fills the top, box_yellow on the floor in front of it (~2.6 m); chair_blue intrudes slightly at the far left edge."
+  },
+  "pallet_jack": {
+    "x": 2.0,
+    "y": -0.5,
+    "yaw_deg": 0,
+    "description": "Pallet jack in full side view, straight ahead at 1.6 m against the east wall."
+  },
+  "person": {
+    "x": 0.2,
+    "y": 0.3,
+    "yaw_deg": -142,
+    "description": "person_standing full-body at ~4 m in the SW corner, box_blue_floor visible on the left."
+  }
+}

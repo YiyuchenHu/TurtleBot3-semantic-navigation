@@ -1,0 +1,3 @@
+# Captured sim frames are machine-local eval inputs; never commit them.
+*
+!.gitignore
