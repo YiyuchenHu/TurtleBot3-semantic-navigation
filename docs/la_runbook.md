@@ -102,26 +102,42 @@ ros2 launch tb3_coordinator full_semantic_nav_la.launch.py \
 
 ## 5. 录屏准备（发第一条命令前做完）
 
-x11grab 抓的是**区域内最顶层窗口**——RViz/Gazebo 被别的窗口盖住就会录到你的桌面
-（R02c 实翻过车，RViz 路素材因此全删）。录屏期间不要在同一屏幕上干别的。
+x11grab 抓的是**区域内最顶层的像素**——目标窗口没铺满录制区域、或被别的窗口/弹窗
+盖住，就会把你的桌面录进去（R02c 删过全部 RViz 素材；R04 又因 Gazebo 没铺满左半屏
+报废过一条，成片前必须逐段抽帧扫描）。录屏期间不要在同一屏幕上干别的，**先关掉
+通知弹窗**（微信等常驻通知会飘在最上层）。
+
+### 5.1 RViz 录屏布局（R04 起）
+
+launch 默认加载 `src/tb3_coordinator/rviz/la_demo.rviz`：只有地图视图
+（SLAM 地图 + landmark MarkerArray + 机器人 + Nav2 路径）和一块**浮动的**
+la_detector debug image 大面板，Displays/Views/Tool Properties/Time 全部隐藏。
+保存的窗口几何按"6144 宽主屏右半"设计：主窗口 (3072,0) 3040×1830，浮动面板
+(3072,1905) 3040×1500。要全套调试面板时传
+`rviz_config:=<绝对路径>/semantic_nav.rviz`。
+
+### 5.2 摆窗与录制（左 Gazebo / 右 RViz 各半屏）
 
 ```bash
-wmctrl -l                                   # 找到 Gazebo / RViz 窗口
-wmctrl -r "RViz" -b add,above               # 置顶
-wmctrl -r "Gazebo" -b add,above
+# 容器里（有 xdotool）；Gazebo 必须铺满左半屏，否则桌面从缝里漏进录像
+docker compose -f docker/compose.yaml -f docker/compose.local.yaml exec sim bash -c '
+export DISPLAY=:1 XAUTHORITY=/tmp/.host_xauth
+GZ=$(xdotool search --class gazebo | while read w; do [ "$(xdotool getwindowname $w)" = Gazebo ] && echo $w && break; done)
+xdotool windowmove $GZ 0 0; xdotool windowsize $GZ 3072 3406; xdotool windowraise $GZ'
 ```
 
-录制（终端 D，按 `wmctrl -lG` 得到的窗口几何改 X,Y,WxH）：
+录制（宿主机，整块主屏缩到 1080p）：
 
 ```bash
-ffmpeg -f x11grab -framerate 30 -video_size 1600x960 -i :0.0+0,0 \
-  ~/Desktop/demo_raw.mp4
+ffmpeg -f x11grab -framerate 24 -video_size 6144x3456 -i :1.0+0,0 \
+  -vf scale=1920:1080 -c:v libx264 -preset veryfast -crf 22 -pix_fmt yuv420p \
+  reports/media/raw_demo.mp4
 ```
 
-**开始录制后立刻抽一帧目检**（另开终端）：
+**开始录制后立刻抽一帧目检**，结束后再按 15 s 间隔抽帧全扫一遍（R04 规约）：
 
 ```bash
-ffmpeg -y -sseof -1 -i ~/Desktop/demo_raw.mp4 -frames:v 1 /tmp/check.jpg && xdg-open /tmp/check.jpg
+ffmpeg -y -sseof -1 -i reports/media/raw_demo.mp4 -frames:v 1 /tmp/check.jpg && xdg-open /tmp/check.jpg
 ```
 
 gzclient 偶发全屏灰屏（第二次起栈时出现过）：`pkill gzclient` 后在容器里
@@ -144,23 +160,62 @@ cd ~/Desktop/Github_Project/TurtleBot3-semantic-navigation
 
 | profile | 文件（src/tb3_detector/config/） | 词表 | 用途 |
 |---|---|---|---|
-| **默认** | `la_detector.yaml` | person + bookshelf + trash can + traffic cone | 日常运行：四类全部在探索中建图 |
-| **验收（搜索演示）** | `la_detector_person_only.yaml` | 仅 person | 三个物体变成词表外目标，查询必然触发搜索链路（R02c 验收配置） |
+| **默认（R04 起）** | `la_detector.yaml` | **空**（coverage 带 4 类 + 4 色衬衫表达式） | search-first 演示形态：平时什么都不建图，**每条命令都走搜索链路** |
+| 四类建图 | `la_detector_four_class.yaml` | person + bookshelf + trash can + traffic cone | R04 前的默认：四类在探索中直接建图，搜索只对词表外词触发 |
+| R02c 验收 | `la_detector_person_only.yaml` | 仅 person | R02c 搜索链路验收配置（历史存档） |
+
+search-first 的 coverage 里多了 4 条衬衫颜色表达式（green/red/blue/white）——这不是装饰：
+R04 探针实测，只注入 "person wearing a green shirt" + person 时模型会把**错误颜色**的人
+强制匹配成该表达式（score 恒 1.0，6/6 阴性全错）；把其它颜色作为正确备选项一起请求后
+同一组 case 12/12 全对（`reports/R04_probe/`）。颜色搜索能"说不"全靠它们。
 
 切换 = 重启栈时给 `detector_config` 参数（先 Ctrl+C 关旧栈，见 §11；新栈 = 全新 memory）：
 
 ```bash
 ros2 launch tb3_coordinator full_semantic_nav_la.launch.py \
   x_pose:=1.0 y_pose:=1.0 \
-  detector_config:=/home/ubuntu/ws/src/tb3_detector/config/la_detector_person_only.yaml \
+  detector_config:=/home/ubuntu/ws/src/tb3_detector/config/la_detector_four_class.yaml \
   2>&1 | tee ~/ws/reports/demo/stack.log
 ```
 
-就绪行变为 `vocabulary=['person']` ——这是确认 profile 生效的判据。
+就绪行的 `vocabulary=[...]` 是确认 profile 生效的判据（默认 profile 显示 `vocabulary=[]`）。
+
+### 7.1 到达后保持（hold_after_goal，R04 起默认开）
+
+TARGET_REACHED / TARGET NOT FOUND 后 coordinator 进 **IDLE 原地停**（探索关闭、
+cmd_vel 清零），日志判据：
+
+```
+[mode] TARGET_REACHED → IDLE
+[hold] TARGET_REACHED → IDLE — holding position, exploration stays off
+```
+
+发下一条命令即从 IDLE 继续。要回到旧的"到达后 3 s 自动恢复探索"行为：
+launch 时给 coordinator 传 `hold_after_goal:=false`（参数在
+`src/tb3_coordinator/config/coordinator.yaml`）。
+
+### 7.2 属性修饰查询（R04）
+
+"find the person **wearing a green shirt**" 这类带属性的注册表类命令不再解析成
+`person`，而是整句表达式走开放词汇搜索（日志判据：
+`Attribute-qualified 'person' → open-vocabulary expression: '...'`）。
+纯类名（"go to the person"）与带序号（"go to person 3"）仍走注册表路径。
+命令动词表含 find / look for / search for / locate 等。
+world 里的三个彩衣 person（绿=中心、蓝=NE、红=SE）由
+`scripts/make_person_variants.py` 生成（生成物 gitignore，重建镜像后重跑一次即可）。
 
 ## 8. 演示剧本（建议顺序）
 
-### 第一段：默认四类词表（起点 `AUTO` 即 (-1.5, 0)）
+> R04 起默认 profile 是 search-first（§7），本节的 R04 版剧本 =
+> 三条命令各一栈（每栈全新 memory，起点 ≥1.2 m 净空）：
+> ① `find the person wearing a green shirt`（搜索→彩衣分辨→REACHED→IDLE 停住）
+> ② `find the bookshelf`（搜索→REACHED→IDLE）
+> ③ `find a bicycle`（探索完成→NOT FOUND→IDLE，零幽灵）。
+> R04 实测：绿衣 103–223 s、书架 225 s、bicycle 否定 705 s。
+> 下面的四段旧剧本基于四类建图 profile，跑它先切
+> `detector_config:=.../la_detector_four_class.yaml`。
+
+### 第一段：四类词表（起点 `AUTO` 即 (-1.5, 0)）
 
 栈起来后**先让它自主探索 60–90 s**（四类都在词表里，探索路上直接建图；person 晋升门槛 8）。
 然后依次发四条命令，每条等 `TARGET_REACHED` 再发下一条：
@@ -264,6 +319,17 @@ cone (2.4, 0)；四面墙在 ±3 m。
 6. **抢占演示要选远目标**：航程 6–10 s 的目标抢占窗口太短（§8 第四段）。
 7. **杀残留进程别用 `pkill -f "长模式"`**：会先匹配到你自己的 bash 命令行自杀，旧栈没死、
    下次 gzserver 端口占用起不来。先 `ps` 列 PID，再 `kill -9 <纯 PID>`（§11）。
+8. **长驻 sim 容器会丢 GPU 访问**（R04 实测）：症状 = rviz2/gzserver/gzclient 全部
+   `GLX BadValue (X_GLXCreateContext, value 0x0)`、gzserver 活着但 0 CPU 卡死、
+   /spawn_entity 服务不出现。确诊：容器内 `nvidia-smi` 报
+   `Failed to initialize NVML: Unknown Error`（宿主 systemd 事件重置了容器的
+   cgroup 设备授权）。修复 = `docker compose ... restart sim`（volume 不受影响），
+   **然后必须 `restart grounding`**——grounding 共享 sim 的网络命名空间，sim 一重启
+   它的 8801 端口就从宿主不可达了。
+9. **发命令前等 Nav2 真正激活**（R04 实测一次启动竞态）：只等 coordinator ready 不够，
+   goal_assignment 可能一直刷 `Nav2 navigate_to_pose action server not ready`，
+   机器人永远不动。判据 = 栈日志出现 `Begin navigating` 或 `[action] Goal accepted`
+   再发第一条命令。
 
 ## 11. 关栈
 
