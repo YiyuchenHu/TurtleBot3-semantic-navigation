@@ -16,3 +16,7 @@ CLAUDE.md
 
 # IDE local settings
 .vscode/
+
+# generated Gazebo model variants (~28 MB each; regenerate with
+# scripts/make_person_variants.py inside the sim container)
+src/tb3_frontier_exploration/models/person_*_shirt/
