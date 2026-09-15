@@ -16,6 +16,33 @@ execution driven by simple rule-based text commands (e.g. `go to person`, `go to
 - **Rule-based natural-language-style terminal commands** (`go to person`, `go to person 3`, `please navigate to the bench`, …) handled deterministically with **no LLM**, supporting nearest-target and indexed selection over semantic memory.
 - **Coordinator state machine** that pauses frontier exploration on a user command, dispatches the goal through Nav2's `NavigateToPose` action with cancellation and timeouts, and auto-resumes exploration when the target is reached or aborted.
 
+## LocateAnything Mode (Open-Vocabulary Perception)
+
+The `feat/locateanything` work replaces YOLOv8n with **NVIDIA LocateAnything-3B**
+as the only perception model in the running stack: detection happens over HTTP
+(`POST /detect`) in a GPU grounding container (`grounding/` + `docker/`), the
+detect vocabulary is free-form text instead of COCO classes, and a **search
+link** lets the robot find objects that are *not* in the current vocabulary —
+`go to the trash can` with a person-only vocabulary injects the phrase into the
+detector via `/active_search`, explores until the landmark is promoted, then
+navigates to it. Unknown objects (`go to the bicycle`) end in an explicit
+`TARGET NOT FOUND` after exploration completes, with no ghost landmarks.
+
+Entry point (both containers up, then inside the sim container):
+
+```bash
+docker compose -f docker/compose.yaml -f docker/compose.local.yaml up -d
+ros2 launch tb3_coordinator full_semantic_nav_la.launch.py
+```
+
+The step-by-step terminal/recording procedure, vocabulary profiles
+(4-class default vs. person-only search-demo), verified spawn points, and
+known pitfalls live in **[docs/la_runbook.md](docs/la_runbook.md)**.
+
+The YOLOv8n path below is kept intact as the **baseline**: the detector node
+stays in the repo and `full_semantic_nav.launch.py` still runs it; the two
+launches share every node except the detection producer.
+
 ## Demo Videos
 
 ### Demo 1 — Bench/Person Semantic Navigation
@@ -131,7 +158,10 @@ Full demo: [Google Drive](https://drive.google.com/file/d/1Qzl15Erv7ww3lYTszrFD-
 
 The simulated TurtleBot3 streams a forward RGB image and a 360° LiDAR scan into ROS 2. `tb3_detector` runs YOLOv8n on every frame and publishes 2D detections, while `tb3_localizer` converts each bounding-box centre into a camera-frame bearing and looks up a robust median range from a small LiDAR window to obtain an `(x, y)` position in `base_link`. `tb3_memory` merges those observations into stable semantic landmarks with deterministic per-class IDs such as `person_0`, `person_1`, …, and `semantic_map_memory_node` snaps them onto the live SLAM Toolbox map for RViz overlay. A terminal command on `/user_command` is intercepted by the coordinator, parsed by the **deterministic, rule-based** `tb3_query` node (no LLM), turned into a safe approach pose by `tb3_nav_adapter`, and executed by Nav2's `NavigateToPose` action — after which the coordinator resumes frontier exploration. These IDs (e.g. `person_3`) are semantic-memory slots, not identity recognition; the system does not perform person re-identification.
 
-## Quick build
+## Quick build (YOLO baseline)
+
+> This section covers the original YOLOv8n baseline path. For the
+> LocateAnything mode, see [docs/la_runbook.md](docs/la_runbook.md).
 
 > **Before building: download YOLOv8n weights (~6 MB).**
 > The `*.pt` files are git-ignored (see `src/tb3_detector/models/.gitignore`),

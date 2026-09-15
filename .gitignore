@@ -13,3 +13,6 @@ __pycache__/
 # local-only (per task brief): never commit
 reports/
 CLAUDE.md
+
+# IDE local settings
+.vscode/
