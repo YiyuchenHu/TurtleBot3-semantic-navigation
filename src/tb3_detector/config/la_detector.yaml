@@ -1,0 +1,55 @@
+# ============================================================
+# tb3_detector — la_detector_node configuration
+# ============================================================
+# LocateAnything mapping-path detector (Phase 2b). Drop-in producer for
+# /detector_node/detections: same message contract as the YOLO
+# detector_node, but inference happens over HTTP in the grounding
+# container (POST /detect, fixed vocabulary).
+
+la_detector_node:
+  ros__parameters:
+    # ── Grounding server ───────────────────────────────────
+    # The grounding compose service shares the sim container's network
+    # namespace, so loopback resolves from every in-container node.
+    server_url: "http://127.0.0.1:8801"
+    request_timeout_sec: 5.0
+
+    # ── Vocabulary ─────────────────────────────────────────
+    # THE source of truth for what the mapping path can label
+    # (词表即真理, R01 §5.5). Every entry must:
+    #   * physically exist in the world (Phase-2b decision 3), and
+    #   * appear verbatim as a detector_label in semantic_targets_la.yaml
+    #     (the query side resolves user commands against that file).
+    # Order matters: it is the priority order for cross-class
+    # deduplication (earlier wins).
+    vocabulary: ["person", "bookshelf", "trash can", "traffic cone"]
+
+    # ── Sampling ───────────────────────────────────────────
+    # Server-side detect is ~0.2-0.3 s/frame (R01 §5.7); 0.3 s keeps at
+    # most ~3 requests/s and matches the YOLO node's effective rate.
+    min_interval_sec: 0.3
+    # Skip frames while the robot spins faster than this (rad/s, from
+    # /odom): motion blur plus the localizer's latest-scan bearing match
+    # make fast-rotation detections land on the wrong obstacle.
+    max_angular_vel: 0.5
+
+    # ── Cross-class dedup ──────────────────────────────────
+    # The model can list one physical object under several vocabulary
+    # entries (R01 §2.3: armchair/chair cross-listing). Two boxes of
+    # DIFFERENT labels with IoU >= this are collapsed to the earlier
+    # vocabulary entry.
+    cross_class_iou: 0.8
+
+    # ── Topics (absolute: the YOLO node's resolved names, so the
+    #    downstream chain and RViz need zero changes) ─────────
+    image_topic:        "/camera/image_raw"
+    odom_topic:         "/odom"
+    detections_topic:   "/detector_node/detections"
+    debug_image_topic:  "/detector_node/debug_image"
+
+    # ── Debug ──────────────────────────────────────────────
+    publish_debug_image: true
+    jpeg_quality: 85
+    queue_size: 5
+    # One [la_stats] summary line per this many seconds (0 disables).
+    stats_interval_sec: 10.0

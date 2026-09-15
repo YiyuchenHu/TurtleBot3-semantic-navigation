@@ -29,6 +29,7 @@ setup(
     entry_points={
         "console_scripts": [
             "detector_node = tb3_detector.detector_node:main",
+            "la_detector_node = tb3_detector.la_detector_node:main",
         ],
     },
 )
