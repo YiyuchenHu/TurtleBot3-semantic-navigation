@@ -60,6 +60,8 @@ class LocalizerNode(Node):
         self.declare_parameter("scan_window_half", 5)
         self.declare_parameter("min_valid_range", 0.12)
         self.declare_parameter("max_valid_range", 8.0)
+        self.declare_parameter("edge_margin_px", 40)
+        self.declare_parameter("edge_drop_summary_sec", 30.0)
         self.declare_parameter("detections_topic", "/detector_node/detections")
         self.declare_parameter("scan_topic", "/scan")
         self.declare_parameter("image_topic", "/camera/image_raw")
@@ -70,6 +72,8 @@ class LocalizerNode(Node):
         scan_window_half = self.get_parameter("scan_window_half").value
         min_range        = self.get_parameter("min_valid_range").value
         max_range        = self.get_parameter("max_valid_range").value
+        edge_margin      = int(self.get_parameter("edge_margin_px").value)
+        summary_sec      = float(self.get_parameter("edge_drop_summary_sec").value)
         det_topic        = self.get_parameter("detections_topic").value
         scan_topic       = self.get_parameter("scan_topic").value
         image_topic      = self.get_parameter("image_topic").value
@@ -82,11 +86,21 @@ class LocalizerNode(Node):
             scan_window_half=scan_window_half,
             min_valid_range=min_range,
             max_valid_range=max_range,
+            edge_margin_px=edge_margin,
         )
 
         # ── State: latest scan and image width ────────────────────────────
         self._latest_scan: LaserScan | None = None
         self._image_width: int = 0
+
+        # ── Edge-box bookkeeping (observability only) ─────────────────────
+        # Per class: detections seen / dropped as frame-edge boxes, printed
+        # as one throttled line so the share is visible in the log.
+        self._edge_seen: dict[str, int] = {}
+        self._edge_dropped: dict[str, int] = {}
+        self._edge_printed: tuple = ()
+        if summary_sec > 0.0:
+            self.create_timer(summary_sec, self._log_edge_summary)
 
         # ── QoS ───────────────────────────────────────────────────────────
         sensor_qos = QoSProfile(
@@ -116,9 +130,22 @@ class LocalizerNode(Node):
 
         self.get_logger().info(
             "LocalizerNode ready  "
-            "hfov=%.1f°  scan_window=%d  range=[%.2f, %.2f]  frame=%s"
-            % (hfov_deg, scan_window_half, min_range, max_range, self._out_frame)
+            "hfov=%.1f°  scan_window=%d  range=[%.2f, %.2f]  edge_margin=%dpx  frame=%s"
+            % (hfov_deg, scan_window_half, min_range, max_range, edge_margin,
+               self._out_frame)
         )
+
+    def _log_edge_summary(self) -> None:
+        snap = tuple(sorted(self._edge_seen.items())) + tuple(sorted(self._edge_dropped.items()))
+        if not self._edge_seen or snap == self._edge_printed:
+            return
+        self._edge_printed = snap
+        parts = []
+        for label in sorted(self._edge_seen):
+            n = self._edge_seen[label]
+            d = self._edge_dropped.get(label, 0)
+            parts.append("%s %d/%d (%.1f%%)" % (label, d, n, 100.0 * d / max(1, n)))
+        self.get_logger().info("[edge_drop] dropped/seen per class: " + "  ".join(parts))
 
     # ── Callbacks ─────────────────────────────────────────────────────────
 
@@ -150,6 +177,14 @@ class LocalizerNode(Node):
             label = det.results[0].hypothesis.class_id
             conf  = det.results[0].hypothesis.score
             u     = det.bbox.center.position.x
+
+            self._edge_seen[label] = self._edge_seen.get(label, 0) + 1
+            if self._core.is_edge_box(u, self._image_width):
+                self._edge_dropped[label] = self._edge_dropped.get(label, 0) + 1
+                self.get_logger().debug(
+                    "[edge_drop] '%s' u=%.0f within %dpx of the frame edge"
+                    % (label, u, self._core.edge_margin_px))
+                continue
 
             result = self._core.localize(
                 label=label,

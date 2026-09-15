@@ -13,6 +13,7 @@
 #include <mutex>
 #include <atomic>
 #include <cmath>
+#include <algorithm>
 #include <limits>
 #include <optional>
 #include <string>
@@ -86,6 +87,13 @@ public:
     declare_parameter<double>("rate", 1.0);
     declare_parameter<double>("min_frontier_distance", 0.5);
     declare_parameter<double>("failed_goal_avoidance_radius", 1.0);
+    // Failed goals are remembered as a TIME-LIMITED SET, not a single slot.
+    // The single slot was the direct cause of the 40 s limit cycle: a frontier
+    // goal failed and was recorded, the fallback goal then failed and
+    // OVERWROTE that record, which re-armed the very frontier that had just
+    // failed. See reports/chat_return_0827_wedge.md.
+    declare_parameter<double>("failed_goal_ttl_sec", 90.0);
+    declare_parameter<int>("failed_goal_max_entries", 64);
     declare_parameter<double>("exploration_complete_log_interval", 5.0);
     declare_parameter<bool>("require_startup_warmup", false);
     declare_parameter<std::string>("startup_warmup_complete_topic", "exploration_warmup_complete");
@@ -131,6 +139,15 @@ public:
     // Without this, the node would log "No valid frontiers" forever
     // while the bot sits idle next to a corner.
     declare_parameter<double>("stalemate_idle_sec", 20.0);
+    // Exploration-complete detection used to be gated on "the robot has
+    // reached at least one goal". That gate is closed exactly when the node
+    // is deadlocked from the start (visit_history_ empty), so it disabled the
+    // escape hatch in the one case that needed it. It is replaced by a
+    // minimum-uptime guard: refuse to declare completion until exploration has
+    // been ENABLED for this long. Measured from the moment exploration became
+    // enabled, not from node construction, so a slow startup warm-up cannot
+    // eat the guard interval.
+    declare_parameter<double>("min_exploration_time_sec", 60.0);
     // Policy when complete: "stop" = stay idle; "return_home" = drive back
     // to the pose recorded at first successful TF lookup.
     declare_parameter<std::string>("on_exploration_complete", "stop");
@@ -365,7 +382,7 @@ private:
    * Implementation summary:
    * 1. Load `min_frontier_distance` and `failed_goal_avoidance_radius` from parameters (squared for comparisons).
    * 2. For each frontier pose, compute squared distance to `(rx, ry)`; skip if closer than `min_frontier_distance`.
-   * 3. If `last_failed_goal_` is set, skip centroids within `failed_goal_avoidance_radius` of that point.
+   * 3. Skip centroids within `failed_goal_avoidance_radius` of ANY unexpired entry in `failed_goals_`.
    * 4. Among remaining, track the index with minimum squared distance.
    * 5. If none remain, return nullopt; else if `frame_id` was empty, copy `frontiers.header.frame_id`, then return index.
    *
@@ -399,14 +416,10 @@ private:
           i, gx, gy, std::sqrt(d2));
         continue;
       }
-      if (last_failed_goal_) {
-        double fdx = gx - last_failed_goal_->x;
-        double fdy = gy - last_failed_goal_->y;
-        if (fdx * fdx + fdy * fdy < avoid_radius_sq) {
-          RCLCPP_DEBUG(get_logger(), "[select] Frontier [%zu] (%.2f, %.2f) skipped: near last failed goal",
-            i, gx, gy);
-          continue;
-        }
+      if (isNearFailedGoal(gx, gy, avoid_radius_sq)) {
+        RCLCPP_DEBUG(get_logger(), "[select] Frontier [%zu] (%.2f, %.2f) skipped: near a recent failed goal",
+          i, gx, gy);
+        continue;
       }
 
       if (get_parameter("enable_repeated_centroid_filter").as_bool()) {
@@ -521,6 +534,12 @@ private:
       return;
     }
 
+    // Exploration is genuinely running from here on: enabled, warm-up done,
+    // Nav2 answering. This is the zero point for min_exploration_time_sec.
+    if (!exploration_start_time_) {
+      exploration_start_time_ = now();
+    }
+
     double rx, ry;
     if (!getRobotPoseInMap(rx, ry)) return;
 
@@ -609,9 +628,15 @@ private:
     // `++idle_tick_streak_` lives at the very end of timerCallback so it
     // ticks exactly once per missed-dispatch tick. dispatchNavGoal()
     // resets it to 0 on any successful dispatch.
-    const bool moved_at_least_once = !visit_history_.empty();
+    // Minimum-uptime guard, replacing the old `!visit_history_.empty()` gate.
+    // The old gate required a prior SUCCESS, so it was shut in exactly the
+    // deadlock it was supposed to break. Time since exploration was enabled is
+    // the property we actually want: "has this node had a fair chance yet".
+    const double min_expl = get_parameter("min_exploration_time_sec").as_double();
+    const bool had_fair_chance = exploration_start_time_ &&
+      (now() - *exploration_start_time_).seconds() >= min_expl;
     if (get_parameter("enable_exploration_complete_detection").as_bool() &&
-        moved_at_least_once)
+        had_fair_chance)
     {
       const int empty_threshold = static_cast<int>(
         get_parameter("empty_frontier_streak_threshold").as_int());
@@ -744,7 +769,7 @@ private:
       switch (result.code) {
         case rclcpp_action::ResultCode::SUCCEEDED:
           RCLCPP_INFO(get_logger(), "[result] SUCCEEDED (%s)", source_tag.c_str());
-          last_failed_goal_.reset();
+          // Deliberately NOT clearing failed_goals_ here -- see recordFailedGoal.
           recordSuccessfulVisit(current_goal_x_, current_goal_y_);
           break;
         case rclcpp_action::ResultCode::ABORTED:
@@ -864,12 +889,9 @@ private:
       // -1 = unknown / out-of-bounds → skip.
       if (cost < 0 || cost > max_cost) continue;
 
-      // Avoid the disc around the most recent failed goal.
-      if (last_failed_goal_) {
-        const double dx = gx - last_failed_goal_->x;
-        const double dy = gy - last_failed_goal_->y;
-        if (dx * dx + dy * dy < avoid_r_sq) continue;
-      }
+      // Avoid the discs around all unexpired failed goals (frontier AND
+      // fallback), so a failing fallback point is not re-offered either.
+      if (isNearFailedGoal(gx, gy, avoid_r_sq)) continue;
       // Anti-loop: skip points whose neighborhood we have already visited too often.
       if (antiloop_on && loop_r > 0.0 && max_visits > 0 &&
           static_cast<int>(countSuccessfulVisitsNear(gx, gy, loop_r_sq)) >= max_visits)
@@ -900,23 +922,76 @@ private:
    *
    * @param gx Goal x in map frame (meters), same as sent to Nav2.
    * @param gy Goal y in map frame (meters).
-   * @return void; writes `last_failed_goal_`.
+   * @return void; appends to (or refreshes an entry in) `failed_goals_`.
    *
    * Pipeline role:
-   * - Provides **simple recovery**: reduces repeated attempts at the same bad centroid (obstacle, planner failure, etc.).
+   * - Provides **recovery**: stops selection from handing back a goal that has
+   *   just failed, for `failed_goal_ttl_sec`.
    *
    * Implementation summary:
-   * 1. Assign `last_failed_goal_` to `{gx, gy}`.
-   * 2. Log at DEBUG.
+   * 1. Drop expired entries.
+   * 2. If an entry already covers (gx, gy), refresh its timestamp instead of
+   *    appending, so one repeatedly-failing spot cannot fill the set.
+   * 3. Otherwise append; evict oldest beyond `failed_goal_max_entries`.
    *
    * Notes:
-   * - Cleared on **SUCCEEDED** in `result_callback`; not cleared on mere timeout cancel until the next outcome handling.
-   * - Only **one** failure point is stored; a new failure overwrites the previous avoidance center.
+   * - frontier and fallback goals share this set and CANNOT overwrite each
+   *   other. That mutual overwrite was the deadlock.
+   * - Entries are NOT cleared on SUCCEEDED. Clearing on success would re-arm a
+   *   chronically failing frontier as soon as any fallback goal happened to
+   *   succeed, which is the same bug through a different door. TTL alone
+   *   decides when a failed goal becomes eligible again.
    */
   void recordFailedGoal(double gx, double gy)
   {
-    last_failed_goal_ = {gx, gy};
-    RCLCPP_DEBUG(get_logger(), "[failed] Recorded (%.2f, %.2f) for avoidance", gx, gy);
+    pruneFailedGoals();
+    const double radius = get_parameter("failed_goal_avoidance_radius").as_double();
+    const double r_sq = radius * radius;
+    for (auto & f : failed_goals_) {
+      const double dx = gx - f.x, dy = gy - f.y;
+      if (dx * dx + dy * dy < r_sq) {
+        f.stamp = now();
+        RCLCPP_DEBUG(get_logger(),
+          "[failed] Refreshed (%.2f, %.2f); set=%zu", f.x, f.y, failed_goals_.size());
+        return;
+      }
+    }
+    failed_goals_.push_back({gx, gy, now()});
+    const size_t cap = static_cast<size_t>(
+      std::max<int64_t>(1, get_parameter("failed_goal_max_entries").as_int()));
+    while (failed_goals_.size() > cap) {
+      failed_goals_.erase(failed_goals_.begin());
+    }
+    RCLCPP_DEBUG(get_logger(), "[failed] Recorded (%.2f, %.2f) for avoidance; set=%zu",
+      gx, gy, failed_goals_.size());
+  }
+
+  /** Drop failure records older than `failed_goal_ttl_sec`. */
+  void pruneFailedGoals()
+  {
+    const double ttl = get_parameter("failed_goal_ttl_sec").as_double();
+    if (ttl <= 0.0) { failed_goals_.clear(); return; }
+    const auto t = now();
+    failed_goals_.erase(
+      std::remove_if(failed_goals_.begin(), failed_goals_.end(),
+        [&](const FailedGoal & f) {
+          // Guard against a clock jump backwards (sim time reset): treat a
+          // negative age as fresh rather than expiring the whole set.
+          const double age = (t - f.stamp).seconds();
+          return age >= 0.0 && age > ttl;
+        }),
+      failed_goals_.end());
+  }
+
+  /** True when (gx, gy) lies within `radius_sq` of any unexpired failure. */
+  bool isNearFailedGoal(double gx, double gy, double radius_sq)
+  {
+    pruneFailedGoals();
+    for (const auto & f : failed_goals_) {
+      const double dx = gx - f.x, dy = gy - f.y;
+      if (dx * dx + dy * dy < radius_sq) return true;
+    }
+    return false;
   }
 
   /** Count how many successful frontier goals landed within radius (map plane) of (mx, my). */
@@ -999,7 +1074,15 @@ private:
   double current_goal_y_{0.0};
 
   // Point is forward-declared at the top of the private section.
-  std::optional<Point> last_failed_goal_;
+  // Time-limited set of goals that failed, timed out, or were rejected.
+  // Entries expire after `failed_goal_ttl_sec`, which is what lets a goal
+  // that failed only because the map was still unknown become selectable
+  // again once SLAM has grown.
+  struct FailedGoal { double x, y; rclcpp::Time stamp; };
+  std::vector<FailedGoal> failed_goals_;
+  // Set when exploration_enabled_ first turns true; the min-uptime guard for
+  // exploration-complete detection is measured from here.
+  std::optional<rclcpp::Time> exploration_start_time_;
   std::optional<rclcpp::Time> last_exploration_complete_log_time_;
   // Throttle for fallback dispatches; prevents re-sending the same point
   // every timer tick while Nav2 is rejecting/aborting it.

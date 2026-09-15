@@ -24,6 +24,18 @@ localizer_node:
     min_valid_range: 0.12
     max_valid_range: 5.0             # tightened from 8.0 for 4x6m warehouse
 
+    # ── Frame-edge boxes ──────────────────────────────────
+    # Drop detections whose bbox centre is within this many pixels of the
+    # left or right image edge (640 px wide: u < 40 or u > 600). A box
+    # clipped by the frame has its centre pulled inward, so its bearing
+    # points beside the object and the LiDAR window returns whatever stands
+    # there. Measured 2026-09-03 over 12 runs: 10-13% of all boxes per class
+    # sat at the edge, and those were the source of the trash_can points on
+    # the person that grew cross-class candidates to n=8-10. The node logs
+    # "[edge_drop] dropped/seen per class" every edge_drop_summary_sec.
+    edge_margin_px: 40
+    edge_drop_summary_sec: 30.0
+
     # ── Topics ────────────────────────────────────────────
     detections_topic: "/detector_node/detections"
     scan_topic:       "/scan"

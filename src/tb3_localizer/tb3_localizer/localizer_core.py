@@ -45,11 +45,29 @@ class LocalizerCore:
         scan_window_half: int = 5,            # rays on each side of central ray
         min_valid_range: float = 0.12,        # reject returns closer than this (m)
         max_valid_range: float = 8.0,         # reject returns beyond this (m)
+        edge_margin_px: int = 40,             # reject boxes centred this close
+                                              # to the left/right image edge
     ) -> None:
         self.camera_hfov_rad = camera_hfov_rad
         self.scan_window_half = scan_window_half
         self.min_valid_range = min_valid_range
         self.max_valid_range = max_valid_range
+        self.edge_margin_px = edge_margin_px
+
+    # ------------------------------------------------------------------
+    # Step 0: frame-edge boxes carry the wrong bearing
+    # ------------------------------------------------------------------
+    def is_edge_box(self, u: float, image_width: int) -> bool:
+        """True if the box centre lies within `edge_margin_px` of a side edge.
+
+        A box clipped by the frame edge has its centre pulled inward, so its
+        bearing points beside the object and the LiDAR window at that bearing
+        returns whatever stands there: measured 2026-09-03, that is how
+        `trash_can` points landed on the person (u=633, conf 0.53) and grew
+        candidates to n=8-10 on a target of the wrong class.
+        """
+        m = self.edge_margin_px
+        return m > 0 and (u < m or u > image_width - m)
 
     # ------------------------------------------------------------------
     # Step 1: pixel → bearing
@@ -151,6 +169,9 @@ class LocalizerCore:
         """Run the full pixel → bearing → scan → (x,y) pipeline for one detection."""
 
         if image_width <= 0:
+            return None
+
+        if self.is_edge_box(bbox_center_x, image_width):
             return None
 
         bearing = self.pixel_to_bearing(bbox_center_x, image_width)

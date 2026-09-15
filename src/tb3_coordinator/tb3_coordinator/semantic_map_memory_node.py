@@ -12,14 +12,22 @@ Pipeline per observation:
   6. Match refined point against existing landmarks/candidates (same class + distance)
   7. Candidates promoted to persistent landmarks after min_observations
   8. Publish all persistent landmarks as MarkerArray
+
+Every rejection in that pipeline (range, TF, grid bounds, no island,
+geometry, mutex) and every success (landmark merge, candidate merge, new
+candidate, promotion) is counted per class, together with the key numbers
+of the most recent event, and printed as one `[gate_summary]` block every
+`gate_summary_interval_sec` seconds when something changed (plus a final
+one at shutdown). Nothing is decided from those counters; they exist so a
+log can say which gate held a target back and by how much.
 """
 
 from __future__ import annotations
 
 import math
 import time as _time
-from collections import deque
-from dataclasses import dataclass
+from collections import defaultdict, deque
+from dataclasses import dataclass, field
 from typing import Optional
 
 import numpy as np
@@ -55,8 +63,35 @@ class Landmark:
     semantic_class: str
     x: float
     y: float
-    observation_count: int = 1
     last_seen: float = 0.0
+    # Evidence per detector label observed inside this landmark's merge
+    # radius, INCLUDING labels that disagree with `semantic_class`. Before
+    # this existed the cross-class mutex threw disagreeing observations away,
+    # so a landmark that was promoted under the wrong label could never be
+    # corrected: the correct observations were the ones being discarded
+    # (measured 2026-09-05: 86 `chair` observations rejected by a
+    # `trash_can_1` landmark sitting on the chair). Keeping the counts turns
+    # that same disagreement into the evidence for a relabel.
+    class_counts: dict = field(default_factory=dict)
+
+    @property
+    def observation_count(self):
+        """Observations supporting the CURRENT label.
+
+        This is what the position EMA, the marker text, the mutex strength
+        and the published hypothesis score all mean by "n" - a landmark with
+        12 trash_can and 86 chair observations still has n=12 while it is
+        labelled trash_can.
+        """
+        return self.class_counts.get(self.semantic_class, 0)
+
+    def counts_summary(self):
+        """'chair:86,trash_can:12' - strongest label first."""
+        if not self.class_counts:
+            return "-"
+        return ",".join(
+            "%s:%d" % kv
+            for kv in sorted(self.class_counts.items(), key=lambda kv: (-kv[1], kv[0])))
 
 
 CLASS_COLORS = {
@@ -79,8 +114,15 @@ def find_nearest_valid_island(
     grid, width, height, cx, cy, search_radius,
     origin_x, origin_y, resolution,
     occupied_thresh=50, min_island_pixels=2, wall_margin_cells=4,
+    diag=None,
 ):
-    """BFS flood-fill for obstacle islands, rejecting wall-like islands."""
+    """BFS flood-fill for obstacle islands, rejecting wall-like islands.
+
+    `diag`, if a dict, receives counts of what the window held: occupied
+    cells, islands found, and how many were dropped as too small, touching
+    the border, or inside the wall margin. Pure observation; the return
+    value does not depend on it.
+    """
     x_lo = max(0, cx - search_radius)
     x_hi = min(width, cx + search_radius + 1)
     y_lo = max(0, cy - search_radius)
@@ -88,6 +130,10 @@ def find_nearest_valid_island(
 
     visited = set()
     islands = []
+    n_occupied = 0
+    n_small = 0
+    n_border = 0
+    n_wall = 0
 
     for iy in range(y_lo, y_hi):
         for ix in range(x_lo, x_hi):
@@ -113,17 +159,29 @@ def find_nearest_valid_island(
                         visited.add((nx, ny))
                         if grid[ny * width + nx] >= occupied_thresh:
                             queue.append((nx, ny))
+            n_occupied += len(island)
             if len(island) < min_island_pixels:
+                n_small += 1
                 continue
             if touches_border:
+                n_border += 1
                 continue
             n = len(island)
             avg_gx = sum(p[0] for p in island) / n
             avg_gy = sum(p[1] for p in island) / n
             if (avg_gx < wall_margin_cells or avg_gx >= width - wall_margin_cells or
                     avg_gy < wall_margin_cells or avg_gy >= height - wall_margin_cells):
+                n_wall += 1
                 continue
             islands.append((avg_gx, avg_gy))
+
+    if diag is not None:
+        diag["occupied"] = n_occupied
+        diag["islands"] = n_small + n_border + n_wall + len(islands)
+        diag["small"] = n_small
+        diag["border"] = n_border
+        diag["wall"] = n_wall
+        diag["valid"] = len(islands)
 
     if not islands:
         return None
@@ -318,7 +376,50 @@ def check_geometry_consistency(
     return True, "no geometry check for class '%s'" % label
 
 
+def should_relabel(class_counts, current_class, relabel_ratio,
+                   class_min_obs, default_min_obs=3):
+    """Pure rule: which label should replace `current_class`, or None.
+
+    A challenger label takes over only when BOTH hold:
+
+      * it has at least `relabel_ratio` times as many observations as the
+        current label - the hysteresis that stops two labels flip-flopping
+        while their counts are close, and
+      * it has reached its own `min_observations` promotion threshold, so a
+        handful of stray detections cannot rename an established landmark.
+
+    Equal counts never relabel (ratio >= 1.0). Because the losing label keeps
+    its count, flipping back needs `relabel_ratio` times the NEW label's
+    count, which is what makes the correction stable rather than oscillating.
+
+    Ties between two qualifying challengers go to the larger count, then to
+    the alphabetically first label, so the outcome never depends on dict
+    ordering.
+    """
+    current = class_counts.get(current_class, 0)
+    best_label = None
+    best_n = -1
+    for label, n in sorted(class_counts.items()):
+        if label == current_class:
+            continue
+        if n < class_min_obs.get(label, default_min_obs):
+            continue
+        if n < relabel_ratio * current:
+            continue
+        if n > best_n:
+            best_label, best_n = label, n
+    return best_label
+
+
 class SemanticMapMemoryNode(Node):
+
+    # Rows of the gate summary, in pipeline order. The first six are the
+    # rejection gates of _obs_cb (the four that used to be silent, plus the
+    # two that already log per event); the last four are the success paths.
+    GATE_ROWS = ("range", "tf", "out_of_grid", "no_island", "geometry", "mutex")
+    PASS_ROWS = ("merge_landmark", "cross_evidence", "relabel",
+                 "merge_candidate", "new_candidate", "promote")
+    STAT_ROWS = GATE_ROWS + PASS_ROWS
 
     def __init__(self):
         super().__init__("semantic_map_memory_node")
@@ -353,9 +454,17 @@ class SemanticMapMemoryNode(Node):
         self.declare_parameter("person_max_islands", 2)
         self.declare_parameter("person_max_total_px", 20)
         self.declare_parameter("bench_min_total_px", 8)
+        self.declare_parameter("relabel_enabled", True)
+        self.declare_parameter("relabel_ratio", 1.5)
+        self.declare_parameter("relabel_evidence_distance_m", 0.6)
         self.declare_parameter("cross_class_mutex_enabled", True)
         self.declare_parameter("cross_class_mutex_distance_m", 0.6)
         self.declare_parameter("mutex_min_observation_count", 3)
+        # Observability only: how often the per-gate counters are printed.
+        # A block is printed only when a counter changed since the last one,
+        # so an idle node stays quiet. 0 disables the periodic block (the
+        # final one at shutdown is still printed).
+        self.declare_parameter("gate_summary_interval_sec", 10.0)
 
         in_topic        = self.get_parameter("input_topic").value
         out_topic       = self.get_parameter("output_topic").value
@@ -393,6 +502,10 @@ class SemanticMapMemoryNode(Node):
         self._person_max_px = self.get_parameter("person_max_total_px").value
         self._bench_min_px = self.get_parameter("bench_min_total_px").value
 
+        self._relabel_enabled = self.get_parameter("relabel_enabled").value
+        self._relabel_ratio = float(self.get_parameter("relabel_ratio").value)
+        self._evidence_d = float(
+            self.get_parameter("relabel_evidence_distance_m").value)
         self._mutex_enabled = self.get_parameter("cross_class_mutex_enabled").value
         self._mutex_dist = self.get_parameter("cross_class_mutex_distance_m").value
         self._mutex_min_obs = self.get_parameter("mutex_min_observation_count").value
@@ -423,14 +536,33 @@ class SemanticMapMemoryNode(Node):
         self._landmarks = {}
         self._next_seq = {}
 
+        # ── Gate statistics (observation only, never consulted) ─────────
+        # One counter per (gate, class) for every `continue` in _obs_cb and
+        # every success path, plus the key numbers of the last event per
+        # (gate, class) so the summary can say by how much a gate failed.
+        self._stat_msgs = 0            # Detection3DArray messages received
+        self._stat_msgs_no_map = 0     # ... dropped because /map not yet seen
+        self._stat_in = defaultdict(int)          # observations per class
+        self._stat = {name: defaultdict(int) for name in self.STAT_ROWS}
+        self._stat_last = {name: {} for name in self.STAT_ROWS}
+        self._stat_expired = defaultdict(int)     # candidates timed out
+        self._stat_expired_max_n = defaultdict(int)
+        self._stat_expired_last = {}
+        self._stat_t0 = _time.time()
+        self._stat_printed = None      # snapshot at the last printed block
+
         self.create_timer(1.0 / max(pub_rate, 0.1), self._publish_markers)
         self.create_timer(5.0, self._cleanup_candidates)
+        summary_dt = float(self.get_parameter("gate_summary_interval_sec").value)
+        if summary_dt > 0.0:
+            self.create_timer(summary_dt, self._log_gate_summary)
 
         self.get_logger().info(
             "SemanticMapMemoryNode ready  merge=%.2fm  cand=%.2fm  min_obs=%d  "
-            "search_r=%d  wall_margin=%.2fm  min_island=%d"
+            "search_r=%d  wall_margin=%.2fm  min_island=%d  relabel=%s(x%.2f)"
             % (self._merge_d, self._cand_d, self._min_obs,
-               self._search_r, self._wall_margin_m, self._min_island))
+               self._search_r, self._wall_margin_m, self._min_island,
+               "on" if self._relabel_enabled else "off", self._relabel_ratio))
 
     def _map_cb(self, msg):
         self._map_width = msg.info.width
@@ -441,7 +573,9 @@ class SemanticMapMemoryNode(Node):
         self._map_data = np.array(msg.data, dtype=np.int8)
 
     def _obs_cb(self, msg):
+        self._stat_msgs += 1
         if self._map_data is None:
+            self._stat_msgs_no_map += 1
             return
 
         wall_margin_cells = max(1, int(self._wall_margin_m / self._map_res))
@@ -451,6 +585,8 @@ class SemanticMapMemoryNode(Node):
                 continue
             label = det.results[0].hypothesis.class_id
             src = det.header.frame_id or msg.header.frame_id or "base_link"
+            obs_id = det.id or "-"
+            self._stat_in[label] += 1
 
             raw_x = det.bbox.center.position.x
             raw_y = det.bbox.center.position.y
@@ -458,6 +594,10 @@ class SemanticMapMemoryNode(Node):
 
             class_max = self._class_max_range.get(label, self._max_obs_range)
             if obs_range > class_max:
+                self._note("range", label,
+                           "r=%.2f > max %.2f (+%.2f) raw=(%.2f,%.2f) id=%s"
+                           % (obs_range, class_max, obs_range - class_max,
+                              raw_x, raw_y, obs_id))
                 continue
 
             pt_in = PointStamped()
@@ -470,13 +610,21 @@ class SemanticMapMemoryNode(Node):
                 pt_out = self._tf_buffer.transform(
                     pt_in, self._frame,
                     timeout=Duration(seconds=self._tf_tout))
-            except Exception:
+            except Exception as exc:  # noqa: BLE001 - same catch as before
+                self._note("tf", label,
+                           "%s->%s %s: %s id=%s"
+                           % (src, self._frame, type(exc).__name__,
+                              str(exc).replace("\n", " ")[:90], obs_id))
                 continue
 
             mx, my = pt_out.point.x, pt_out.point.y
             gx, gy = world_to_grid(mx, my, self._map_ox, self._map_oy, self._map_res)
 
             if not (0 <= gx < self._map_width and 0 <= gy < self._map_height):
+                self._note("out_of_grid", label,
+                           "map=(%.2f,%.2f) cell=(%d,%d) grid=%dx%d id=%s"
+                           % (mx, my, gx, gy, self._map_width,
+                              self._map_height, obs_id))
                 continue
 
             if label == "bench":
@@ -490,15 +638,30 @@ class SemanticMapMemoryNode(Node):
                     cluster_radius_cells=self._bench_cluster_r,
                     logger=self.get_logger())
             else:
+                island_diag = {}
                 refined = find_nearest_valid_island(
                     self._map_data, self._map_width, self._map_height,
                     gx, gy, self._search_r,
                     self._map_ox, self._map_oy, self._map_res,
                     occupied_thresh=self._occ_thresh,
                     min_island_pixels=self._min_island,
-                    wall_margin_cells=wall_margin_cells)
+                    wall_margin_cells=wall_margin_cells,
+                    diag=island_diag)
 
             if refined is None:
+                if label == "bench":
+                    why = "bench cluster search found no island"
+                else:
+                    why = ("window r=%d cells: occ=%d islands=%d (small %d, "
+                           "border %d, wall_margin %d)"
+                           % (self._search_r, island_diag.get("occupied", 0),
+                              island_diag.get("islands", 0),
+                              island_diag.get("small", 0),
+                              island_diag.get("border", 0),
+                              island_diag.get("wall", 0)))
+                self._note("no_island", label,
+                           "map=(%.2f,%.2f) r=%.2f %s id=%s"
+                           % (mx, my, obs_range, why, obs_id))
                 continue
 
             rx, ry = refined
@@ -517,37 +680,68 @@ class SemanticMapMemoryNode(Node):
                     bench_min_total_px=self._bench_min_px)
                 if not compat:
                     self.get_logger().info("[reject] %s" % reason)
+                    self._note("geometry", label, reason)
                     continue
                 self.get_logger().debug("[geometry] %s" % reason)
 
             blocked, mutex_reason = self._check_cross_class_mutex(label, rx, ry)
             if blocked:
                 self.get_logger().info("[mutex] %s" % mutex_reason)
+                self._note("mutex", label, "%s id=%s" % (mutex_reason, obs_id))
                 continue
 
             now = _time.time()
 
             matched_lm = self._find_landmark(label, rx, ry)
             if matched_lm is not None:
+                d_lm = math.hypot(matched_lm.x - rx, matched_lm.y - ry)
                 self._update_landmark(matched_lm, rx, ry, now)
+                self._note("merge_landmark", label,
+                           "%s n=%d d=%.2f id=%s"
+                           % (matched_lm.landmark_id,
+                              matched_lm.observation_count, d_lm, obs_id))
+                continue
+
+            other_lm = self._find_landmark_other_class(label, rx, ry)
+            if other_lm is not None:
+                self._record_cross_evidence(other_lm, label, rx, ry, now)
                 continue
 
             matched_cand = self._find_candidate(label, rx, ry)
             if matched_cand is not None:
+                d_c = math.hypot(matched_cand.x - rx, matched_cand.y - ry)
                 self._update_candidate(matched_cand, rx, ry, now)
                 class_min_obs = self._class_min_obs.get(label, self._min_obs)
+                self._note("merge_candidate", label,
+                           "n=%d/%d d=%.2f pos=(%.2f,%.2f) id=%s"
+                           % (matched_cand.obs_count, class_min_obs, d_c,
+                              matched_cand.x, matched_cand.y, obs_id))
                 if matched_cand.obs_count >= class_min_obs:
+                    self._note("promote", label,
+                               "n=%d pos=(%.2f,%.2f)"
+                               % (matched_cand.obs_count,
+                                  matched_cand.x, matched_cand.y))
                     self._promote(matched_cand)
                 continue
 
+            self._note("new_candidate", label,
+                       "pos=(%.2f,%.2f) r=%.2f id=%s" % (rx, ry, obs_range, obs_id))
             self._candidates.append(Candidate(
                 semantic_class=label, x=rx, y=ry, obs_count=1, last_seen=now))
 
     def _check_cross_class_mutex(self, label, x, y):
-        """Check if a different-class landmark or strong candidate is at the same location.
+        """Check if a strong different-class CANDIDATE sits at this location.
 
-        Returns (blocked, reason) where blocked=True means the observation
-        should be rejected because a stronger different-class entry exists nearby.
+        Returns (blocked, reason); blocked=True means the observation is
+        rejected because a stronger different-class candidate exists nearby.
+
+        Landmarks are deliberately not consulted any more. A disagreeing
+        observation that lands on an existing landmark is now recorded as
+        evidence against that landmark's label (see `_record_cross_evidence`)
+        instead of being discarded, which is what makes a mislabelled
+        landmark recoverable. The candidate half of the rule is unchanged:
+        it is the gate that stopped label swaps from ever being promoted in
+        the first place, and it is still doing that job.
         """
         if not self._mutex_enabled:
             return False, ""
@@ -556,14 +750,6 @@ class SemanticMapMemoryNode(Node):
 
         best_blocker = None
         best_obs = 0
-
-        for lm in self._landmarks.values():
-            if lm.semantic_class == label:
-                continue
-            d = math.hypot(lm.x - x, lm.y - y)
-            if d < self._mutex_dist and lm.observation_count > best_obs:
-                best_blocker = lm
-                best_obs = lm.observation_count
 
         for c in self._candidates:
             if c.semantic_class == label:
@@ -574,18 +760,11 @@ class SemanticMapMemoryNode(Node):
                 best_obs = c.obs_count
 
         if best_blocker is not None:
-            if isinstance(best_blocker, Landmark):
-                reason = (
-                    "%s obs at (%.2f,%.2f) blocked by %s landmark %s (n=%d, d=%.2fm)"
-                    % (label, x, y, best_blocker.semantic_class,
-                       best_blocker.landmark_id, best_blocker.observation_count,
-                       math.hypot(best_blocker.x - x, best_blocker.y - y)))
-            else:
-                reason = (
-                    "%s obs at (%.2f,%.2f) blocked by %s candidate (n=%d, d=%.2fm)"
-                    % (label, x, y, best_blocker.semantic_class,
-                       best_blocker.obs_count,
-                       math.hypot(best_blocker.x - x, best_blocker.y - y)))
+            reason = (
+                "%s obs at (%.2f,%.2f) blocked by %s candidate (n=%d, d=%.2fm)"
+                % (label, x, y, best_blocker.semantic_class,
+                   best_blocker.obs_count,
+                   math.hypot(best_blocker.x - x, best_blocker.y - y)))
             return True, reason
 
         return False, ""
@@ -604,6 +783,33 @@ class SemanticMapMemoryNode(Node):
                     best_score = score
         return best
 
+    def _find_landmark_other_class(self, label, x, y):
+        """Nearest landmark of a DIFFERENT class within the evidence radius.
+
+        The radius is `relabel_evidence_distance_m`, which defaults to the
+        cross-class mutex distance rather than the (much larger) merge
+        distance. That is deliberate and was measured: an observation inside
+        the mutex distance of a different-class landmark is exactly what the
+        old code threw away, so counting it as evidence costs the candidate
+        layer nothing. Widening it to the merge distance instead starves
+        candidates - over 8 acceptance runs at 1.5 m, one run absorbed 53
+        chair observations while the chair candidate saw 2, and the chair was
+        never promoted.
+
+        Nearest wins, so when two different-class landmarks are both in range
+        the observation is attributed to the one it most likely belongs to.
+        """
+        best = None
+        best_d = float("inf")
+        for lm in self._landmarks.values():
+            if lm.semantic_class == label:
+                continue
+            d = math.hypot(lm.x - x, lm.y - y)
+            if d < self._evidence_d and d < best_d:
+                best = lm
+                best_d = d
+        return best
+
     def _find_candidate(self, label, x, y):
         best = None
         best_d = float("inf")
@@ -617,10 +823,14 @@ class SemanticMapMemoryNode(Node):
         return best
 
     def _update_landmark(self, lm, x, y, now):
+        # Position is averaged over observations of the CURRENT label only:
+        # a disagreeing observation is evidence about the label, not about
+        # where the object is, and letting it move the landmark would drag
+        # the position towards whatever else is nearby.
         n = lm.observation_count
         lm.x = (lm.x * n + x) / (n + 1)
         lm.y = (lm.y * n + y) / (n + 1)
-        lm.observation_count = n + 1
+        lm.class_counts[lm.semantic_class] = n + 1
         lm.last_seen = now
         if lm.observation_count % 50 == 0:
             self.get_logger().info(
@@ -634,14 +844,61 @@ class SemanticMapMemoryNode(Node):
         c.obs_count = n + 1
         c.last_seen = now
 
+    def _record_cross_evidence(self, lm, label, x, y, now):
+        """Count a disagreeing observation against `lm`, and relabel if due."""
+        lm.class_counts[label] = lm.class_counts.get(label, 0) + 1
+        lm.last_seen = now
+        d = math.hypot(lm.x - x, lm.y - y)
+        self._note("cross_evidence", label,
+                   "%s (%s) n_%s=%d d=%.2f [%s]"
+                   % (lm.landmark_id, lm.semantic_class, label,
+                      lm.class_counts[label], d, lm.counts_summary()))
+        if not self._relabel_enabled:
+            return
+        new_label = should_relabel(
+            lm.class_counts, lm.semantic_class, self._relabel_ratio,
+            self._class_min_obs, self._min_obs)
+        if new_label is not None:
+            self._relabel(lm, new_label)
+
+    def _relabel(self, lm, new_label):
+        """Retire the landmark's id and re-issue it under `new_label`."""
+        old_id = lm.landmark_id
+        old_label = lm.semantic_class
+        old_n = lm.class_counts.get(old_label, 0)
+        new_n = lm.class_counts.get(new_label, 0)
+
+        seq = self._next_seq.get(new_label, 0)
+        self._next_seq[new_label] = seq + 1
+        new_id = "%s_%d" % (new_label, seq)
+
+        # The old id is retired, never reused: anything holding on to it
+        # (a pending nav goal, a log line) should not silently start
+        # referring to a landmark that now means something else.
+        self._landmarks.pop(old_id, None)
+        lm.landmark_id = new_id
+        lm.semantic_class = new_label
+        self._landmarks[new_id] = lm
+
+        self.get_logger().info(
+            "[relabel] relabeled %s -> %s at (%.2f, %.2f): %s %d vs %s %d"
+            % (old_id, new_id, lm.x, lm.y, new_label, new_n, old_label, old_n))
+        self._note("relabel", new_label,
+                   "%s -> %s at (%.2f,%.2f) [%s]"
+                   % (old_id, new_id, lm.x, lm.y, lm.counts_summary()))
+        # Markers, marker text and landmark_objects are all rebuilt from
+        # self._landmarks on the next publish tick, so colour, label text and
+        # the query-visible class follow from here with no extra work.
+        self._publish_markers()
+
     def _promote(self, c):
         seq = self._next_seq.get(c.semantic_class, 0)
         self._next_seq[c.semantic_class] = seq + 1
         lid = "%s_%d" % (c.semantic_class, seq)
         lm = Landmark(
             landmark_id=lid, semantic_class=c.semantic_class,
-            x=c.x, y=c.y,
-            observation_count=c.obs_count, last_seen=c.last_seen)
+            x=c.x, y=c.y, last_seen=c.last_seen,
+            class_counts={c.semantic_class: c.obs_count})
         self._landmarks[lid] = lm
         self._candidates.remove(c)
         self.get_logger().info(
@@ -651,11 +908,108 @@ class SemanticMapMemoryNode(Node):
     def _cleanup_candidates(self):
         now = _time.time()
         before = len(self._candidates)
+        expired = [
+            c for c in self._candidates if (now - c.last_seen) >= self._cand_tout]
         self._candidates = [
             c for c in self._candidates if (now - c.last_seen) < self._cand_tout]
         removed = before - len(self._candidates)
         if removed > 0:
             self.get_logger().info("[cleanup] Removed %d stale candidates" % removed)
+        # Observation only: which candidate died, how far it was from its
+        # promotion threshold, and where it sat. A candidate that repeatedly
+        # expires one or two observations short is the signature this
+        # summary exists to expose.
+        for c in expired:
+            need = self._class_min_obs.get(c.semantic_class, self._min_obs)
+            self._stat_expired[c.semantic_class] += 1
+            self._stat_expired_max_n[c.semantic_class] = max(
+                self._stat_expired_max_n[c.semantic_class], c.obs_count)
+            self._stat_expired_last[c.semantic_class] = (
+                "n=%d/%d (short %d) age=%.0fs pos=(%.2f,%.2f)"
+                % (c.obs_count, need, max(0, need - c.obs_count),
+                   now - c.last_seen, c.x, c.y))
+            self.get_logger().info(
+                "[cleanup] expired %s candidate %s"
+                % (c.semantic_class, self._stat_expired_last[c.semantic_class]))
+
+    # ── Gate statistics ──────────────────────────────────────────────────
+
+    def _note(self, row, label, detail):
+        """Count one event on `row` for `label` and remember its detail."""
+        self._stat[row][label] += 1
+        self._stat_last[row][label] = detail
+
+    def _stat_snapshot(self):
+        return (self._stat_msgs, self._stat_msgs_no_map,
+                tuple(sorted(self._stat_in.items())),
+                tuple((row, tuple(sorted(self._stat[row].items())))
+                      for row in self.STAT_ROWS),
+                tuple(sorted(self._stat_expired.items())))
+
+    def _format_gate_summary(self, tag):
+        labels = sorted(set(self._stat_in) | set(self._class_min_obs))
+        elapsed = _time.time() - self._stat_t0
+        head = ("[gate_summary%s] t=+%.0fs msgs=%d (before /map: %d)  in: %s"
+                % (tag, elapsed, self._stat_msgs, self._stat_msgs_no_map,
+                   " ".join("%s=%d" % (lb, self._stat_in.get(lb, 0))
+                            for lb in labels) or "-"))
+        lines = [head]
+        col = max(9, max((len(lb) for lb in labels), default=9))
+        lines.append("  %-15s %s  last"
+                     % ("row", " ".join("%*s" % (col, lb) for lb in labels)))
+        for row in self.STAT_ROWS:
+            counts = self._stat[row]
+            if not counts:
+                continue
+            # The `last` column shows the class with the most recent hit on
+            # this row; per-class details are in the per-event logs of the
+            # loud gates and in this row's counts for the silent ones.
+            last_lb, last_txt = next(reversed(self._stat_last[row].items()))
+            lines.append("  %-15s %s  %s: %s"
+                         % (row,
+                            " ".join("%*d" % (col, counts.get(lb, 0))
+                                     for lb in labels),
+                            last_lb, last_txt))
+        if self._stat_expired:
+            lines.append("  %-15s %s"
+                         % ("expired",
+                            " | ".join(
+                                "%s x%d (max n=%d/%d) last %s"
+                                % (lb, n, self._stat_expired_max_n[lb],
+                                   self._class_min_obs.get(lb, self._min_obs),
+                                   self._stat_expired_last.get(lb, ""))
+                                for lb, n in sorted(self._stat_expired.items()))))
+        now = _time.time()
+        if self._candidates:
+            lines.append("  candidates: " + " | ".join(
+                "%s n=%d/%d age=%.0fs (%.2f,%.2f)"
+                % (c.semantic_class, c.obs_count,
+                   self._class_min_obs.get(c.semantic_class, self._min_obs),
+                   now - c.last_seen, c.x, c.y)
+                for c in self._candidates))
+        if self._landmarks:
+            lines.append("  landmarks: " + " | ".join(
+                "%s n=%d (%.2f,%.2f) counts=[%s]"
+                % (lm.landmark_id, lm.observation_count, lm.x, lm.y,
+                   lm.counts_summary())
+                for lm in self._landmarks.values()))
+        return "\n".join(lines)
+
+    def _log_gate_summary(self, tag="", force=False):
+        snap = self._stat_snapshot()
+        if not force and snap == self._stat_printed:
+            return
+        self._stat_printed = snap
+        self.get_logger().info(self._format_gate_summary(tag))
+
+    def destroy_node(self):
+        # Final table, so a run that ended between two periodic blocks still
+        # leaves its totals in the log.
+        try:
+            self._log_gate_summary(tag=" final", force=True)
+        except Exception:  # noqa: BLE001 - shutdown must not fail on a log
+            pass
+        super().destroy_node()
 
     def _publish_markers(self):
         ma = MarkerArray()

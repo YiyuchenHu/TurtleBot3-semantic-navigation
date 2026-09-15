@@ -40,10 +40,16 @@ def generate_launch_description():
             parameters=[
                 config,
                 {"use_sim_time": use_sim_time},
-                {"frontier_detection_node": {"ros__parameters": {
-                    "map_topic": map_topic,
-                    "costmap_topic": costmap_topic,
-                }}},
+                # Flat {name: value}. A dict entry in `parameters` is a literal
+                # override list, not a YAML document: launch_ros flattens any
+                # nesting into dotted names, so the old
+                # {"frontier_detection_node": {"ros__parameters": {...}}} form
+                # produced undeclared parameters named
+                # "frontier_detection_node.ros__parameters.map_topic" and the
+                # two launch arguments silently did nothing. The node-name /
+                # ros__parameters wrapper belongs only in the YAML file above.
+                {"map_topic": map_topic,
+                 "costmap_topic": costmap_topic},
             ],
             output="screen",
         ),
@@ -54,9 +60,11 @@ def generate_launch_description():
             parameters=[
                 config,
                 {"use_sim_time": use_sim_time},
-                {"goal_assignment_node": {"ros__parameters": {
-                    "odom_topic": odom_topic,
-                }}},
+                # Same flattening bug as above. Note the subscription this feeds
+                # is an intentional no-op hook (goal_assignment_node.cpp
+                # odomCallback); the argument is kept working so the topic name
+                # stays overridable, not because pose comes from it.
+                {"odom_topic": odom_topic},
             ],
             output="screen",
         ),

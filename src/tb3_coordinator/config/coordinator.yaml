@@ -104,6 +104,48 @@ semantic_map_memory_node:
     stop_sign_min_observations: 5
     wall_boundary_margin_m:   0.20
 
+    # ── Landmark relabelling ───────────────────────────────
+    # A landmark used to be stuck with whatever label promoted it. The
+    # cross-class mutex then discarded every disagreeing observation that
+    # landed on it, so a landmark promoted under the wrong label actively
+    # suppressed the evidence that would have corrected it: measured
+    # 2026-09-05, a `trash_can_1` sitting on the chair rejected 86 `chair`
+    # observations and `go to chair` could not succeed until the run was
+    # restarted.
+    #
+    # Now every landmark keeps a per-label observation count, disagreeing
+    # observations inside the merge radius are counted instead of dropped,
+    # and the label switches when a challenger is clearly ahead. Position is
+    # still averaged over observations of the current label only.
+    relabel_enabled:           true
+    # How far ahead the challenger has to be: challenger >= ratio x current,
+    # AND the challenger must also have reached its own min_observations
+    # (12 for chair / trash_can, 8 for person) so a few strays cannot rename
+    # anything. 1.5 is the hysteresis band. Because the losing label keeps
+    # its count, flipping back needs 1.5x the NEW count, so a correction
+    # settles instead of oscillating. Equal counts never relabel.
+    relabel_ratio:             1.5
+    # How close a disagreeing observation has to be to count as evidence.
+    # Kept at the cross-class mutex distance ON PURPOSE, not at
+    # merge_distance: this is exactly the set of observations the old code
+    # already discarded, so counting them costs the candidate layer nothing.
+    # Measured at 1.5 m over 8 acceptance runs it starved candidates instead
+    # - one run absorbed 53 chair observations while the chair candidate saw
+    # 2, and the chair was never promoted. Raise it only together with a
+    # fresh acceptance batch.
+    relabel_evidence_distance_m: 0.6
+
+    # ── Gate statistics (observability only) ──────────────
+    # Every rejection gate in the observation pipeline (range, TF, grid
+    # bounds, no occupancy island, geometry, mutex) and every success path
+    # (landmark merge, candidate merge, new candidate, promotion) is counted
+    # per class. One `[gate_summary]` block is logged every this many
+    # seconds when a counter changed, plus a final block at shutdown, so a
+    # log can say which gate held a target back and by how much. The
+    # counters are never consulted by the promotion logic. 0 disables the
+    # periodic block (the final one is still printed).
+    gate_summary_interval_sec: 10.0
+
     # ── Visualization ──────────────────────────────────────
     sphere_radius:            0.18
     text_offset_z:            0.45
