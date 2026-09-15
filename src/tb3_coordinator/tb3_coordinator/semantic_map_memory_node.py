@@ -899,9 +899,23 @@ class SemanticMapMemoryNode(Node):
                       lm.class_counts[label], d, lm.counts_summary()))
         if not self._relabel_enabled:
             return
+        # Search-aware challenger threshold. Measured need (R02c smoke
+        # run 1): with the searched class absent from the mapping
+        # vocabulary until injection, another class (person) promotes a
+        # landmark AT the target first, and the target's own
+        # observations all land here as cross evidence — relabel is the
+        # only road back. The generic challenger floor of 8 plus the
+        # 1.5x ratio made that road too long (person:18 vs trash
+        # can:17 stayed stuck); during an active search the searched
+        # label challenges at search_min_observations instead. The
+        # 1.5x hysteresis is untouched.
+        eff_min_obs = self._class_min_obs
+        if self._search_label is not None:
+            eff_min_obs = dict(self._class_min_obs)
+            eff_min_obs[self._search_label] = self._search_min_obs
         new_label = should_relabel(
             lm.class_counts, lm.semantic_class, self._relabel_ratio,
-            self._class_min_obs, self._min_obs)
+            eff_min_obs, self._min_obs)
         if new_label is not None:
             self._relabel(lm, new_label)
 
