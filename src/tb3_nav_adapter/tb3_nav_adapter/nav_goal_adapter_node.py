@@ -30,6 +30,7 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 from rclpy.duration import Duration
+from rclpy.time import Time
 
 from geometry_msgs.msg import PoseStamped, PointStamped
 
@@ -106,17 +107,50 @@ class NavGoalAdapterNode(Node):
         ty = msg.position.y
         source_frame = msg.frame_id or "base_link"
 
+        # compute_approach_pose expects the target RELATIVE TO THE ROBOT
+        # (its contract: robot at the origin). The query node publishes
+        # landmarks in its output_frame (map) without transforming them
+        # into the robot frame, so feeding (tx, ty) straight in measured
+        # the target's distance to the MAP ORIGIN, not to the robot: a
+        # landmark near map (0,0) — e.g. the centre person of the default
+        # world, whose map frame coincides with the Gazebo world frame
+        # because the TB3 diff-drive plugin uses world odometry — was
+        # always rejected as "too close", and every other approach pose
+        # was laid along the origin→target ray instead of the
+        # robot→target ray. Locate the robot in the message frame and
+        # work with the relative vector; the returned goal is relative to
+        # the robot, so shift it back before publishing.
+        try:
+            t = self._tf_buffer.lookup_transform(
+                source_frame, "base_link", Time(),
+                timeout=Duration(seconds=self._tf_timeout),
+            )
+        except (
+            tf2_ros.LookupException,
+            tf2_ros.ConnectivityException,
+            tf2_ros.ExtrapolationException,
+        ) as e:
+            self.get_logger().warn(
+                "Cannot locate robot in %s (%s), skipping goal"
+                % (source_frame, e)
+            )
+            return
+        rx = t.transform.translation.x
+        ry = t.transform.translation.y
+
         result = compute_approach_pose(
-            tx, ty, self._approach_dist, self._min_standoff
+            tx - rx, ty - ry, self._approach_dist, self._min_standoff
         )
 
         if result is None:
             self.get_logger().warn(
-                "Target %s too close (%.2fm), skipping goal" % (msg.object_id, (tx**2 + ty**2)**0.5)
+                "Target %s too close to the robot (%.2fm), skipping goal"
+                % (msg.object_id, ((tx - rx) ** 2 + (ty - ry) ** 2) ** 0.5)
             )
             return
 
-        gx, gy, yaw = result
+        gx_rel, gy_rel, yaw = result
+        gx, gy = rx + gx_rel, ry + gy_rel
         qx, qy, qz, qw = yaw_to_quaternion(yaw)
 
         goal = PoseStamped()
