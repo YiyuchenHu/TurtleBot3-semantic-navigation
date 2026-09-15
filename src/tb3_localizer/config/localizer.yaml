@@ -36,6 +36,38 @@ localizer_node:
     edge_margin_px: 40
     edge_drop_summary_sec: 30.0
 
+    # ── bbox height ↔ ray distance consistency gate (R05) ─
+    # The scan ray is cast at the bbox centre column; when a FAR object's
+    # column crosses a NEARER obstacle, the ray returns the near range and
+    # the observation lands on the wrong object (R04 §4.4). A real object
+    # at ray distance d subtends ≈ f·H/d px — a bbox shorter than
+    # expected/tolerance belongs to something farther than the ray hit
+    # and is dropped. One-sided on purpose: taller-than-expected boxes
+    # are frame-clipping at close range and stay accepted. R05 mapping
+    # smoke (pre-gate): three "person wearing a blue shirt" ghosts and a
+    # cone ghost at n=8 each, all far-box-on-near-obstacle; the R04
+    # occlusion filter only fires when the occluder is detected in the
+    # SAME frame.
+    height_gate_enabled: true
+    # Reject when apparent depth ratio exceeds this (bbox_h < expected/tol).
+    height_gate_tolerance: 2.0
+    # "label:metres[:tolerance]" (true model heights — MEASURE, don't
+    # assume: construction_cone carries <scale>10 10 10</scale> and is
+    # ~0.9 m in this world, not a real cone's 0.35 m; the wrong prior
+    # made smoke 4's upper check kill all 86 TRUE cone observations).
+    # Any label containing "person" (color expressions, injected search
+    # terms) falls back to the "person" prior; labels without a prior
+    # are not gated.
+    # Squat classes (<= 0.8 m) get tighter per-class tolerances AND a
+    # two-sided check (much-taller-than-expected box = a bigger object
+    # force-matched into the class): with the default 2.0 the smoke-3
+    # cone ghost slipped through at 88 px vs 84 px required (1.1 m ray).
+    # traffic cone at 0.9 m keeps its tight 1.4 tolerance but sits above
+    # the 0.8 m squat threshold, so it is one-sided again — its ghosts
+    # were far-box-on-near-obstacle, which the lower bound still kills.
+    height_priors: ["person:1.75", "bookshelf:1.2:1.5", "trash can:0.6:1.5",
+                    "traffic cone:0.9:1.4", "concrete barrier:1.1"]
+
     # ── Topics ────────────────────────────────────────────
     detections_topic: "/detector_node/detections"
     scan_topic:       "/scan"
