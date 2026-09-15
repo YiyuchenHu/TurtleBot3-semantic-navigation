@@ -9,3 +9,7 @@ log/
 # Python
 __pycache__/
 *.py[cod]
+
+# local-only (per task brief): never commit
+reports/
+CLAUDE.md
