@@ -459,6 +459,27 @@ class SemanticMapMemoryNode(Node):
         # expire at 7/8. 5 still filters the run-1 ghost pattern
         # (3 stray observations).
         self.declare_parameter("search_min_observations", 5)
+        # Candidate expiry for the ACTIVE search class. The generic
+        # candidate_timeout (45 s since last observation) assumes the
+        # mapping path's steady observation stream; a searched class is
+        # observed only when exploration happens to face it, so its
+        # observations arrive in drive-by bursts with long dry spells.
+        # Measured (R04 smoke 2, green shirt at the room centre —
+        # frontier exploration faces outward, away from the centre): the
+        # true candidate hit n=4/5 TWICE and expired at age=45 s both
+        # times; the search ended NOT FOUND after 260 s. This window
+        # must bridge the gap between two exploration passes.
+        self.declare_parameter("search_candidate_timeout", 150.0)
+        # Candidate merge radius for the ACTIVE search class. Measured
+        # (R04 G2): observations of the true green-shirt person cluster
+        # within d=0.00-0.25 (a person is a point obstacle — every ray
+        # lands ON it), while MISLOCALIZED search boxes (ray passes the
+        # distant target and hits whatever obstacle is nearer on that
+        # bearing) scatter with d=0.79-0.95, and the generic 1.5 m
+        # radius let five of them assemble into a fake landmark at
+        # (0.98, 2.20) that the robot then navigated to. 0.6 m keeps
+        # tight true clusters and starves the scattered fakes.
+        self.declare_parameter("search_candidate_merge_distance", 0.6)
         self.declare_parameter("active_search_topic", "/active_search")
         # Minimum range for observations of the ACTIVE search class.
         # Detect-mode forced choice is strongest at very close range: a
@@ -527,6 +548,10 @@ class SemanticMapMemoryNode(Node):
         }
         self._search_min_obs = int(
             self.get_parameter("search_min_observations").value)
+        self._search_cand_tout = float(
+            self.get_parameter("search_candidate_timeout").value)
+        self._search_cand_d = float(
+            self.get_parameter("search_candidate_merge_distance").value)
         self._search_label = None  # active /active_search expression
         self._search_min_range = float(
             self.get_parameter("search_min_range_m").value)
@@ -888,11 +913,17 @@ class SemanticMapMemoryNode(Node):
     def _find_candidate(self, label, x, y):
         best = None
         best_d = float("inf")
+        # Active-search candidates use the tighter merge radius: true
+        # search targets cluster tightly, mislocalized boxes scatter (R04).
+        if self._search_label is not None and label == self._search_label:
+            merge_d = self._search_cand_d
+        else:
+            merge_d = self._cand_d
         for c in self._candidates:
             if c.semantic_class != label:
                 continue
             d = math.hypot(c.x - x, c.y - y)
-            if d < self._cand_d and d < best_d:
+            if d < merge_d and d < best_d:
                 best = c
                 best_d = d
         return best
@@ -1006,10 +1037,19 @@ class SemanticMapMemoryNode(Node):
     def _cleanup_candidates(self):
         now = _time.time()
         before = len(self._candidates)
+
+        def _tout(c):
+            # Active-search candidates get the longer window: their
+            # observations arrive in drive-by bursts (R04).
+            if self._search_label is not None and \
+                    c.semantic_class == self._search_label:
+                return self._search_cand_tout
+            return self._cand_tout
+
         expired = [
-            c for c in self._candidates if (now - c.last_seen) >= self._cand_tout]
+            c for c in self._candidates if (now - c.last_seen) >= _tout(c)]
         self._candidates = [
-            c for c in self._candidates if (now - c.last_seen) < self._cand_tout]
+            c for c in self._candidates if (now - c.last_seen) < _tout(c)]
         removed = before - len(self._candidates)
         if removed > 0:
             self.get_logger().info("[cleanup] Removed %d stale candidates" % removed)
