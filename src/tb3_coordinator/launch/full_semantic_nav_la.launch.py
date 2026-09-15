@@ -169,12 +169,17 @@ def generate_launch_description():
     # THE difference from the baseline: la_detector_node instead of the
     # YOLO detector.launch.py include. Publishes on the same absolute
     # topics, so localizer/memory/RViz need no changes.
+    # detector_config selects the la_detector parameter profile:
+    #   default              → config/la_detector.yaml (4-class vocabulary)
+    #   R02c acceptance demo → config/la_detector_person_only.yaml
+    #     (["person"] only; bookshelf / trash can / cone are found via
+    #      the search link — see docs/la_runbook.md §7)
     la_detector = Node(
         package="tb3_detector",
         executable="la_detector_node",
         name="la_detector_node",
         parameters=[
-            os.path.join(pkg_det, "config", "la_detector.yaml"),
+            LaunchConfiguration("detector_config"),
             {"use_sim_time": use_sim_time},
         ],
         output="screen",
@@ -260,6 +265,16 @@ def generate_launch_description():
             description=(
                 "Robot spawn y in map frame, or 'AUTO' to use the "
                 "world preset's recommended pose."
+            ),
+        ),
+        DeclareLaunchArgument(
+            "detector_config",
+            default_value=os.path.join(pkg_det, "config", "la_detector.yaml"),
+            description=(
+                "la_detector_node parameter file. Default: the 4-class "
+                "vocabulary profile. Pass the absolute path of "
+                "la_detector_person_only.yaml for the R02c search-link "
+                "acceptance profile."
             ),
         ),
         DeclareLaunchArgument(

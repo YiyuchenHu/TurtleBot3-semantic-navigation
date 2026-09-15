@@ -23,13 +23,18 @@ la_detector_node:
     # Order matters: it is the priority order for cross-class
     # deduplication (earlier wins).
     #
-    # Phase 2c: shrunk to ["person"] — every other class is now an
-    # OPEN-VOCABULARY target discovered on demand by the search link
-    # (the coordinator injects the query expression via /active_search;
-    # the injected term is prepended, i.e. top dedup priority). The
-    # R02b 4-class mapping behavior is one param override away:
-    #   vocabulary: ["person", "bookshelf", "trash can", "traffic cone"]
-    vocabulary: ["person"]
+    # Default (R02c wrap-up decision 5): the full 4-class registry —
+    # every world object maps during exploration, searches only trigger
+    # for words outside this list (e.g. "go to the bicycle"). The
+    # search link still works on top of it: the coordinator injects the
+    # query expression via /active_search; the injected term is
+    # prepended, i.e. top dedup priority.
+    #
+    # The R02c acceptance profile (vocabulary shrunk to ["person"] so
+    # bookshelf / trash can / cone are open-vocabulary search targets)
+    # lives in la_detector_person_only.yaml — select it with the
+    # detector_config launch argument (see docs/la_runbook.md §7).
+    vocabulary: ["person", "bookshelf", "trash can", "traffic cone"]
 
     # ── Search-link injection ──────────────────────────────
     # Latched String from the coordinator: a free-form expression to
@@ -47,6 +52,9 @@ la_detector_node:
     # object veto) see those objects again — but their boxes are
     # dropped before publishing, so the classes never reach memory
     # until a search injects them. Set [] to disable (pure open-world).
+    # The node subtracts anything already in the effective vocabulary,
+    # so with the 4-class default this list is inert — it only kicks in
+    # when the vocabulary is shrunk (e.g. la_detector_person_only.yaml).
     coverage_categories: ["bookshelf", "trash can", "traffic cone"]
 
     # ── Sampling ───────────────────────────────────────────
