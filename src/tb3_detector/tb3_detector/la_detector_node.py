@@ -94,6 +94,21 @@ def filter_bearing_occluded(dets: list[dict],
     return kept, dropped
 
 
+def labels_agree(a: str, b: str) -> bool:
+    """True when one label is a token-subset of the other — the two names
+    describe the SAME object family, not a forced-choice conflict.
+
+    "person" ⊆ "person wearing a green shirt" → agree (the model saying
+    both about one box is double-labeling, not a mislabel). "person
+    wearing a red shirt" vs "person wearing a green shirt" differ in a
+    token → conflict. Used by the coverage veto (R04): without it, the
+    shirt-color coverage categories veto the very observation a person
+    search (or a color search) is trying to accumulate.
+    """
+    ta, tb = set(a.split()), set(b.split())
+    return ta <= tb or tb <= ta
+
+
 def dedup_cross_class(dets: list[dict], priority: dict[str, int],
                       iou_threshold: float) -> tuple[list[dict], int]:
     """Collapse overlapping boxes of DIFFERENT labels onto the label with
@@ -174,8 +189,15 @@ class LaDetectorNode(Node):
         queue = int(g("queue_size"))
         self._stats_interval = float(g("stats_interval_sec"))
 
-        if not self._base_vocabulary:
-            raise ValueError("la_detector_node: vocabulary must not be empty")
+        # R04 search-first profile: an EMPTY base vocabulary is allowed as
+        # long as coverage categories exist — nothing is published (and
+        # nothing enters memory) between searches; only the /active_search
+        # expression is ever published. Both empty would send empty
+        # category lists to /detect, which stays an error.
+        if not self._base_vocabulary and not self._coverage_base:
+            raise ValueError(
+                "la_detector_node: vocabulary and coverage_categories "
+                "must not both be empty")
 
         self._bridge = CvBridge()
         self._last_request_t: float | None = None   # ROS time, seconds
@@ -314,7 +336,9 @@ class LaDetectorNode(Node):
             kept = []
             for d in dets:
                 clash = any(iou_xyxy(c["bbox_xyxy"], d["bbox_xyxy"])
-                            >= self._cross_iou for c in cover_dets)
+                            >= self._cross_iou
+                            and not labels_agree(c["label"], d["label"])
+                            for c in cover_dets)
                 if clash:
                     self._st["cover_vetoed"] += 1
                 else:

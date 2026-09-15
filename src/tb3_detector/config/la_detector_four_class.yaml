@@ -1,0 +1,99 @@
+# ============================================================
+# tb3_detector — la_detector_node FOUR-CLASS profile
+# ============================================================
+# The pre-R04 default (R02c wrap-up decision 5): the full 4-class
+# registry maps during exploration; searches only trigger for words
+# outside the vocabulary. Since R04 the DEFAULT profile is
+# la_detector.yaml (search-first, empty vocabulary); select this one
+# with the detector_config launch argument (docs/la_runbook.md §7).
+
+la_detector_node:
+  ros__parameters:
+    # ── Grounding server ───────────────────────────────────
+    # The grounding compose service shares the sim container's network
+    # namespace, so loopback resolves from every in-container node.
+    server_url: "http://127.0.0.1:8801"
+    request_timeout_sec: 5.0
+
+    # ── Vocabulary ─────────────────────────────────────────
+    # THE source of truth for what the mapping path can label
+    # (词表即真理, R01 §5.5). Every entry must:
+    #   * physically exist in the world (Phase-2b decision 3), and
+    #   * appear verbatim as a detector_label in semantic_targets_la.yaml
+    #     (the query side resolves user commands against that file).
+    # Order matters: it is the priority order for cross-class
+    # deduplication (earlier wins).
+    #
+    # Default (R02c wrap-up decision 5): the full 4-class registry —
+    # every world object maps during exploration, searches only trigger
+    # for words outside this list (e.g. "go to the bicycle"). The
+    # search link still works on top of it: the coordinator injects the
+    # query expression via /active_search; the injected term is
+    # prepended, i.e. top dedup priority.
+    #
+    # The R02c acceptance profile (vocabulary shrunk to ["person"] so
+    # bookshelf / trash can / cone are open-vocabulary search targets)
+    # lives in la_detector_person_only.yaml — select it with the
+    # detector_config launch argument (see docs/la_runbook.md §7).
+    vocabulary: ["person", "bookshelf", "trash can", "traffic cone"]
+
+    # ── Search-link injection ──────────────────────────────
+    # Latched String from the coordinator: a free-form expression to
+    # detect IN ADDITION to the base vocabulary ('' = none).
+    active_search_topic: "/active_search"
+
+    # ── Coverage categories (requested, filtered on, NEVER published) ──
+    # R02c smoke run 1 measured what shrinking the vocabulary does: with
+    # ["person"] alone the occlusion filter went blind to the three
+    # world objects, a mislocalized box chain promoted a fake person at
+    # the trash can and at the bookshelf, and the cone collected enough
+    # forced-choice "trash can" boxes (n=5) that the search navigated
+    # to the wrong object. These categories ride along in every /detect
+    # request so the geometric safety nets (occlusion filter, same-
+    # object veto) see those objects again — but their boxes are
+    # dropped before publishing, so the classes never reach memory
+    # until a search injects them. Set [] to disable (pure open-world).
+    # The node subtracts anything already in the effective vocabulary,
+    # so with the 4-class default this list is inert — it only kicks in
+    # when the vocabulary is shrunk (e.g. la_detector_person_only.yaml).
+    coverage_categories: ["bookshelf", "trash can", "traffic cone"]
+
+    # ── Sampling ───────────────────────────────────────────
+    # Server-side detect is ~0.2-0.3 s/frame (R01 §5.7); 0.3 s keeps at
+    # most ~3 requests/s and matches the YOLO node's effective rate.
+    min_interval_sec: 0.3
+    # Skip frames while the robot spins faster than this (rad/s, from
+    # /odom): motion blur plus the localizer's latest-scan bearing match
+    # make fast-rotation detections land on the wrong obstacle.
+    max_angular_vel: 0.5
+
+    # ── Bearing-occlusion filter ───────────────────────────
+    # Drop a detection whose bbox centre column is spanned by a NEARER
+    # detection of another class (nearer = bottom edge >=8 px lower;
+    # everything here stands on the floor). The planar localizer casts
+    # the scan ray at the centre column, so such detections are
+    # guaranteed to be localized onto the occluder — run 1 measured the
+    # cone behind the centre person planting a fake "traffic cone"
+    # landmark on the person this way (R02b §4).
+    occlusion_filter: true
+
+    # ── Cross-class dedup ──────────────────────────────────
+    # The model can list one physical object under several vocabulary
+    # entries (R01 §2.3: armchair/chair cross-listing). Two boxes of
+    # DIFFERENT labels with IoU >= this are collapsed to the earlier
+    # vocabulary entry.
+    cross_class_iou: 0.8
+
+    # ── Topics (absolute: the YOLO node's resolved names, so the
+    #    downstream chain and RViz need zero changes) ─────────
+    image_topic:        "/camera/image_raw"
+    odom_topic:         "/odom"
+    detections_topic:   "/detector_node/detections"
+    debug_image_topic:  "/detector_node/debug_image"
+
+    # ── Debug ──────────────────────────────────────────────
+    publish_debug_image: true
+    jpeg_quality: 85
+    queue_size: 5
+    # One [la_stats] summary line per this many seconds (0 disables).
+    stats_interval_sec: 10.0
