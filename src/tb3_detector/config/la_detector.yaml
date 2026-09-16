@@ -137,6 +137,24 @@ la_detector_node:
     # make fast-rotation detections land on the wrong obstacle.
     max_angular_vel: 0.5
 
+    # ── Frame-skip rules (R06a step 4) ─────────────────────
+    # (a) LiDAR-clear: fewer than skip_lidar_min_rays returns inside the
+    #     camera FOV are closer than skip_lidar_range_m → nothing the
+    #     planar localizer could hit inside the memory range gate, skip.
+    # (b) static: displacement since the last request < 0.2 m AND yaw
+    #     change < 10° → the view has not changed, skip.
+    # At least one request every skip_fallback_sec regardless; counts
+    # and the resulting skip rate are in the [la_stats] line.
+    skip_lidar_enabled: true
+    skip_lidar_range_m: 3.3
+    skip_lidar_min_rays: 3
+    skip_static_enabled: true
+    skip_static_dist_m: 0.2
+    skip_static_yaw_deg: 10.0
+    skip_fallback_sec: 2.0
+    camera_hfov_deg: 62.2
+    scan_topic: "/scan"
+
     # ── Bearing-occlusion filter ───────────────────────────
     # Drop a detection whose bbox centre column is spanned by a NEARER
     # detection of another class (nearer = bottom edge >=8 px lower;

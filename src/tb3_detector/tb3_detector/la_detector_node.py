@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import base64
 import json
+import math
 import threading
 import time
 import urllib.error
@@ -38,7 +39,7 @@ from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 
 from nav_msgs.msg import Odometry
-from sensor_msgs.msg import Image
+from sensor_msgs.msg import Image, LaserScan
 from std_msgs.msg import String
 from vision_msgs.msg import Detection2D, Detection2DArray, ObjectHypothesisWithPose
 
@@ -196,6 +197,25 @@ class LaDetectorNode(Node):
                                ["person", "bookshelf", "trash can", "traffic cone"])
         self.declare_parameter("min_interval_sec", 0.3)
         self.declare_parameter("max_angular_vel", 0.5)
+        # ── Frame-skip rules (R06a step 4) ───────────────────────────
+        # (a) nothing for the planar localizer to hit: no LiDAR return
+        #     closer than `skip_lidar_range_m` inside the camera FOV
+        #     (at least `skip_lidar_min_rays` rays, i.e. a cluster) →
+        #     a box would be range-gated by memory anyway, skip.
+        # (b) the view has not changed: displacement since the last
+        #     request < `skip_static_dist_m` AND |yaw change| <
+        #     `skip_static_yaw_deg` → skip.
+        # Safety net: at least one request every `skip_fallback_sec`
+        # regardless. Skip counts are in the [la_stats] line.
+        self.declare_parameter("skip_lidar_enabled", True)
+        self.declare_parameter("skip_lidar_range_m", 3.3)
+        self.declare_parameter("skip_lidar_min_rays", 3)
+        self.declare_parameter("skip_static_enabled", True)
+        self.declare_parameter("skip_static_dist_m", 0.2)
+        self.declare_parameter("skip_static_yaw_deg", 10.0)
+        self.declare_parameter("skip_fallback_sec", 2.0)
+        self.declare_parameter("camera_hfov_deg", 62.2)
+        self.declare_parameter("scan_topic", "/scan")
         self.declare_parameter("cross_class_iou", 0.8)
         # Coverage veto also fires when a publishable box lies (mostly)
         # INSIDE a disagreeing coverage box — the part-of-a-whole
@@ -250,6 +270,14 @@ class LaDetectorNode(Node):
         self._two_phase_trigger = str(g("two_phase_trigger")).lower()
         self._min_interval = float(g("min_interval_sec"))
         self._max_ang_vel = float(g("max_angular_vel"))
+        self._skip_lidar = bool(g("skip_lidar_enabled"))
+        self._skip_lidar_range = float(g("skip_lidar_range_m"))
+        self._skip_lidar_min_rays = int(g("skip_lidar_min_rays"))
+        self._skip_static = bool(g("skip_static_enabled"))
+        self._skip_static_dist = float(g("skip_static_dist_m"))
+        self._skip_static_yaw = math.radians(float(g("skip_static_yaw_deg")))
+        self._skip_fallback = float(g("skip_fallback_sec"))
+        self._half_hfov = math.radians(float(g("camera_hfov_deg"))) / 2.0
         self._cross_iou = float(g("cross_class_iou"))
         self._cover_containment = float(g("coverage_containment"))
         self._occlusion_filter = bool(g("occlusion_filter"))
@@ -272,6 +300,9 @@ class LaDetectorNode(Node):
         self._bridge = CvBridge()
         self._last_request_t: float | None = None   # ROS time, seconds
         self._angular_vel = 0.0
+        self._pose: tuple[float, float, float] | None = None   # x, y, yaw (odom)
+        self._last_request_pose: tuple[float, float, float] | None = None
+        self._latest_scan: LaserScan | None = None
         self._server_seen = False
         self._options_logged = False
         # R05 camera-rate debug: /detect runs in a worker thread so the
@@ -285,11 +316,13 @@ class LaDetectorNode(Node):
         # Rolling stats for the [la_stats] line (report metrics: per-frame
         # /detect latency and cross-class dedup count).
         self._st = dict(frames=0, skipped_interval=0, skipped_spin=0,
+                        skipped_lidar=0, skipped_static=0, forced_fallback=0,
                         requests=0, second_phase=0, errors=0, dedup_dropped=0,
                         srv_sum=0.0, srv_n=0,
                         occl_dropped=0, cover_vetoed=0, lat_sum=0.0,
                         lat_max=0.0, det_counts={}, cover_counts={})
         self._last_stats_wall = time.monotonic()
+        self._t_start = time.monotonic()
 
         sensor_qos = QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT,
                                 durability=DurabilityPolicy.VOLATILE, depth=queue)
@@ -300,6 +333,8 @@ class LaDetectorNode(Node):
                                  self._image_cb, sensor_qos)
         self.create_subscription(Odometry, str(g("odom_topic")),
                                  self._odom_cb, sensor_qos)
+        self.create_subscription(LaserScan, str(g("scan_topic")),
+                                 self._scan_cb, sensor_qos)
         # Latched: a term published before this node (re)starts still
         # arrives. The coordinator is the only publisher.
         search_qos = QoSProfile(reliability=ReliabilityPolicy.RELIABLE,
@@ -379,6 +414,43 @@ class LaDetectorNode(Node):
 
     def _odom_cb(self, msg: Odometry) -> None:
         self._angular_vel = msg.twist.twist.angular.z
+        q = msg.pose.pose.orientation
+        yaw = math.atan2(2.0 * (q.w * q.z + q.x * q.y),
+                         1.0 - 2.0 * (q.y * q.y + q.z * q.z))
+        self._pose = (msg.pose.pose.position.x, msg.pose.pose.position.y, yaw)
+
+    def _scan_cb(self, msg: LaserScan) -> None:
+        self._latest_scan = msg
+
+    # ── Skip rules ──────────────────────────────────────────────────────
+
+    def _fov_clear(self) -> bool:
+        """True when fewer than `skip_lidar_min_rays` LiDAR returns inside
+        the camera FOV are closer than `skip_lidar_range_m` (scan angles
+        run [0, 2π) with 0 = forward, as in the localizer)."""
+        sc = self._latest_scan
+        if sc is None or sc.angle_increment == 0.0:
+            return False
+        near = 0
+        for i, r in enumerate(sc.ranges):
+            a = sc.angle_min + i * sc.angle_increment
+            a = (a + math.pi) % (2.0 * math.pi) - math.pi   # → (-π, π]
+            if abs(a) > self._half_hfov:
+                continue
+            if math.isfinite(r) and sc.range_min <= r <= self._skip_lidar_range:
+                near += 1
+                if near >= self._skip_lidar_min_rays:
+                    return False
+        return True
+
+    def _view_unchanged(self) -> bool:
+        if self._pose is None or self._last_request_pose is None:
+            return False
+        x, y, yaw = self._pose
+        lx, ly, lyaw = self._last_request_pose
+        dyaw = (yaw - lyaw + math.pi) % (2.0 * math.pi) - math.pi
+        return (math.hypot(x - lx, y - ly) < self._skip_static_dist
+                and abs(dyaw) < self._skip_static_yaw)
 
     def _image_cb(self, msg: Image) -> None:
         self._st["frames"] += 1
@@ -405,10 +477,23 @@ class LaDetectorNode(Node):
         if abs(self._angular_vel) > self._max_ang_vel:
             self._st["skipped_spin"] += 1
             return
+        # Skip rules (R06a step 4), overridden by the periodic fallback.
+        forced = (self._last_request_t is not None
+                  and now - self._last_request_t >= self._skip_fallback)
+        if not forced:
+            if self._skip_lidar and self._fov_clear():
+                self._st["skipped_lidar"] += 1
+                return
+            if self._skip_static and self._view_unchanged():
+                self._st["skipped_static"] += 1
+                return
+        elif self._skip_lidar or self._skip_static:
+            self._st["forced_fallback"] += 1
 
         # Mark the slot BEFORE dispatching: queued frames that drain while
         # the worker runs must not fire immediately again.
         self._last_request_t = now
+        self._last_request_pose = self._pose
         self._inflight.set()
         threading.Thread(target=self._detect_worker,
                          args=(bgr.copy(), msg.header), daemon=True).start()
@@ -624,13 +709,18 @@ class LaDetectorNode(Node):
         srv = s["srv_sum"] / s["srv_n"] if s["srv_n"] else 0.0
         self.get_logger().info(
             "[la_stats] frames=%d requests=%d(+%d second-phase) errors=%d "
-            "skipped(interval=%d, spin=%d) latency(avg=%.0fms, max=%.0fms, "
-            "server avg=%.0fms) "
+            "skipped(interval=%d, spin=%d, lidar_clear=%d, static=%d; "
+            "fallback_forced=%d) req_rate=%.2f/s "
+            "latency(avg=%.0fms, max=%.0fms, server avg=%.0fms) "
             "dedup_dropped=%d occlusion_dropped=%d cover_vetoed=%d "
             "search=%s detections=%s coverage=%s"
             % (s["frames"], s["requests"], s["second_phase"], s["errors"],
-               s["skipped_interval"],
-               s["skipped_spin"], avg, s["lat_max"], srv, s["dedup_dropped"],
+               s["skipped_interval"], s["skipped_spin"], s["skipped_lidar"],
+               s["skipped_static"], s["forced_fallback"],
+               # requests per wall second since the node started: the
+               # skip rules show up as a lower rate than 1/round-trip
+               s["requests"] / max(1e-6, now - self._t_start),
+               avg, s["lat_max"], srv, s["dedup_dropped"],
                s["occl_dropped"], s["cover_vetoed"], repr(self._search_term),
                s["det_counts"], s["cover_counts"]))
 
