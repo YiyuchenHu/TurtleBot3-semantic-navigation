@@ -96,6 +96,38 @@ la_detector_node:
                           "person wearing a blue shirt",
                           "person wearing a white shirt"]
 
+    # ── Generation options (R06a) ──────────────────────────
+    # Sent with every /detect as "options". Measured on the R05 60-frame
+    # capture (reports/R06a_perception_latency.md §2):
+    #   * greedy (argmax with the model-card T/top_p sharpening kept —
+    #     temperature 0 breaks this checkpoint's MTP decoder) ==
+    #     sampling in latency, deterministic, reproduces 92% of the
+    #     sampled boxes; the lost ones are frame-edge person boxes.
+    #   * hybrid == fast on the median (~405 ms for 9 categories), but
+    #     hybrid's AR fallback churns on busy multi-person frames
+    #     (39-48 decode steps, one 132-step / 2.0 s outlier in the bag
+    #     replay) where fast stays at 28-29 steps → fast.
+    #   * token cap 32 + 40/category (~3x a real answer) only bounds
+    #     runaway generations: a degenerate decode measured 6 s/frame.
+    #   * gen_max_side 448 would save ~45 ms/frame but halves the
+    #     concrete-barrier recall (8 -> 4 of 60 frames) and drops far
+    #     shirt-colour boxes — stays at native 640.
+    gen_mode: "fast"
+    gen_greedy: true
+    gen_tokens_base: 32
+    gen_tokens_per_category: 40
+    gen_max_side: 0
+    # Two-phase coverage (expressions only requested when the primary
+    # request hit a person): measured no latency win (persons are in
+    # most frames) and worse boxes (blue over-fires 20 -> 31, the
+    # 5-term primary loses the barrier 8 -> 2) — left OFF.
+    two_phase_coverage: false
+    two_phase_terms: ["person wearing a green shirt",
+                      "person wearing a red shirt",
+                      "person wearing a blue shirt",
+                      "person wearing a white shirt"]
+    two_phase_trigger: "person"
+
     # ── Sampling ───────────────────────────────────────────
     # Server-side detect is ~0.2-0.3 s/frame (R01 §5.7); 0.3 s keeps at
     # most ~3 requests/s and matches the YOLO node's effective rate.

@@ -160,6 +160,38 @@ class LaDetectorNode(Node):
 
         self.declare_parameter("server_url", "http://127.0.0.1:8801")
         self.declare_parameter("request_timeout_sec", 5.0)
+        # ── Generation options sent with every /detect (R06a step 3c) ──
+        # Measured on the R05 60-frame capture (reports/R06a): greedy ==
+        # sampling in latency, deterministic, reproduces 92% of the
+        # sampled boxes (the rest are frame-edge person boxes the
+        # localizer drops anyway); hybrid == fast on the median, but
+        # hybrid's AR fallback churns on busy frames (39-48 steps, one
+        # 132-step / 2.0 s outlier in the replay) where fast stays at
+        # 28-29 steps. The token cap only bounds runaway generations (a
+        # degenerate decode ran 6 s/frame): 32 + 40/category is ~3x a
+        # real answer.
+        self.declare_parameter("gen_mode", "fast")
+        self.declare_parameter("gen_greedy", True)
+        self.declare_parameter("gen_tokens_base", 32)
+        self.declare_parameter("gen_tokens_per_category", 40)
+        # Input downscale (longer side, px; 0 = native 640). Measured:
+        # 448 px saves ~45 ms but halves concrete-barrier recall and drops
+        # the far shirt-colour boxes — kept at native (R06a step 3b).
+        self.declare_parameter("gen_max_side", 0)
+        # ── Two-phase coverage (R06a step 3a, OFF) ───────────────────
+        # Primary request = vocabulary + physical coverage only; the
+        # listed expression terms are requested in a SECOND call on the
+        # same frame only when the primary hit `two_phase_trigger`.
+        # Measured on the 60-frame capture: no latency win (persons are
+        # in most frames, so both calls run: 525 ms vs 409 ms) and the
+        # expression-only request over-fires (blue 20 -> 31) while the
+        # 5-class primary loses the barrier (8 -> 2 frames) — the model
+        # answers a 9-term prompt differently from a 5-term one.
+        self.declare_parameter("two_phase_coverage", False)
+        self.declare_parameter("two_phase_terms", [
+            "person wearing a green shirt", "person wearing a red shirt",
+            "person wearing a blue shirt", "person wearing a white shirt"])
+        self.declare_parameter("two_phase_trigger", "person")
         self.declare_parameter("vocabulary",
                                ["person", "bookshelf", "trash can", "traffic cone"])
         self.declare_parameter("min_interval_sec", 0.3)
@@ -208,6 +240,14 @@ class LaDetectorNode(Node):
         self._priority: dict[str, int] = {}
         self._coverage: list[str] = []
         self._rebuild_vocabulary()
+        self._gen_mode = str(g("gen_mode"))
+        self._gen_greedy = bool(g("gen_greedy"))
+        self._gen_tokens_base = int(g("gen_tokens_base"))
+        self._gen_tokens_per_cat = int(g("gen_tokens_per_category"))
+        self._gen_max_side = int(g("gen_max_side"))
+        self._two_phase = bool(g("two_phase_coverage"))
+        self._two_phase_terms = [str(t).lower() for t in g("two_phase_terms")]
+        self._two_phase_trigger = str(g("two_phase_trigger")).lower()
         self._min_interval = float(g("min_interval_sec"))
         self._max_ang_vel = float(g("max_angular_vel"))
         self._cross_iou = float(g("cross_class_iou"))
@@ -233,6 +273,7 @@ class LaDetectorNode(Node):
         self._last_request_t: float | None = None   # ROS time, seconds
         self._angular_vel = 0.0
         self._server_seen = False
+        self._options_logged = False
         # R05 camera-rate debug: /detect runs in a worker thread so the
         # image callback never blocks on HTTP; the callback republishes
         # the debug image EVERY frame with the latest finished overlay.
@@ -244,7 +285,8 @@ class LaDetectorNode(Node):
         # Rolling stats for the [la_stats] line (report metrics: per-frame
         # /detect latency and cross-class dedup count).
         self._st = dict(frames=0, skipped_interval=0, skipped_spin=0,
-                        requests=0, errors=0, dedup_dropped=0,
+                        requests=0, second_phase=0, errors=0, dedup_dropped=0,
+                        srv_sum=0.0, srv_n=0,
                         occl_dropped=0, cover_vetoed=0, lat_sum=0.0,
                         lat_max=0.0, det_counts={}, cover_counts={})
         self._last_stats_wall = time.monotonic()
@@ -274,9 +316,12 @@ class LaDetectorNode(Node):
         self._check_server_health()
         self.get_logger().info(
             "la_detector_node ready. server=%s vocabulary=%s "
-            "min_interval=%.2fs max_ang_vel=%.2frad/s cross_iou=%.2f"
+            "min_interval=%.2fs max_ang_vel=%.2frad/s cross_iou=%.2f "
+            "gen=%s/%s max_side=%d two_phase=%s"
             % (self._server_url, self._vocabulary, self._min_interval,
-               self._max_ang_vel, self._cross_iou))
+               self._max_ang_vel, self._cross_iou, self._gen_mode,
+               "greedy" if self._gen_greedy else "sample",
+               self._gen_max_side, self._two_phase))
 
     # ── Search-link vocabulary injection ────────────────────────────────
 
@@ -378,10 +423,23 @@ class LaDetectorNode(Node):
 
     def _run_detect(self, bgr, header) -> None:
         t0 = time.monotonic()
-        result = self._post_detect(bgr)
-        rtt_ms = (time.monotonic() - t0) * 1000.0
+        categories = self._vocabulary + self._coverage
+        deferred: list[str] = []
+        if self._two_phase:
+            deferred = [c for c in categories if c in self._two_phase_terms
+                        and c not in self._priority]
+            categories = [c for c in categories if c not in deferred]
+        result = self._post_detect(bgr, categories)
         if result is None:
             return
+        if deferred and any(self._two_phase_trigger in d.get("label", "")
+                            for d in result.get("detections", [])):
+            second = self._post_detect(bgr, deferred)
+            self._st["second_phase"] += 1
+            if second is not None:
+                result["detections"] = (result.get("detections", [])
+                                        + second.get("detections", []))
+        rtt_ms = (time.monotonic() - t0) * 1000.0
         self._st["requests"] += 1
         self._st["lat_sum"] += rtt_ms
         self._st["lat_max"] = max(self._st["lat_max"], rtt_ms)
@@ -435,7 +493,7 @@ class LaDetectorNode(Node):
 
     # ── HTTP ────────────────────────────────────────────────────────────
 
-    def _post_detect(self, bgr) -> dict | None:
+    def _post_detect(self, bgr, categories: list[str]) -> dict | None:
         ok, buf = cv2.imencode(
             ".jpg", bgr, [int(cv2.IMWRITE_JPEG_QUALITY), self._jpeg_quality])
         if not ok:
@@ -443,7 +501,14 @@ class LaDetectorNode(Node):
             return None
         payload = json.dumps({
             "image": base64.b64encode(buf.tobytes()).decode("ascii"),
-            "categories": self._vocabulary + self._coverage,
+            "categories": categories,
+            "options": {
+                "generation_mode": self._gen_mode,
+                "do_sample": not self._gen_greedy,
+                "max_new_tokens": self._gen_tokens_base
+                + self._gen_tokens_per_cat * len(categories),
+                "max_side": self._gen_max_side,
+            },
         }).encode()
         req = urllib.request.Request(
             self._server_url + "/detect", data=payload,
@@ -451,11 +516,14 @@ class LaDetectorNode(Node):
         try:
             with urllib.request.urlopen(req, timeout=self._timeout) as resp:
                 out = json.load(resp)
-            if not self._server_seen:
-                self._server_seen = True
+            timing = out.get("timing") or {}
+            if not self._options_logged:
+                self._options_logged = True
                 self.get_logger().info(
-                    "grounding server responding (backend=%s)"
-                    % out.get("backend"))
+                    "grounding server responding (backend=%s, options in "
+                    "force=%s)" % (out.get("backend"), timing.get("options")))
+            self._st["srv_sum"] += float(timing.get("total_ms", out.get("latency_ms", 0.0)))
+            self._st["srv_n"] += 1
             return out
         except (urllib.error.URLError, TimeoutError, json.JSONDecodeError,
                 ConnectionError, OSError) as e:
@@ -553,13 +621,16 @@ class LaDetectorNode(Node):
         self._last_stats_wall = now
         s = self._st
         avg = s["lat_sum"] / s["requests"] if s["requests"] else 0.0
+        srv = s["srv_sum"] / s["srv_n"] if s["srv_n"] else 0.0
         self.get_logger().info(
-            "[la_stats] frames=%d requests=%d errors=%d "
-            "skipped(interval=%d, spin=%d) latency(avg=%.0fms, max=%.0fms) "
+            "[la_stats] frames=%d requests=%d(+%d second-phase) errors=%d "
+            "skipped(interval=%d, spin=%d) latency(avg=%.0fms, max=%.0fms, "
+            "server avg=%.0fms) "
             "dedup_dropped=%d occlusion_dropped=%d cover_vetoed=%d "
             "search=%s detections=%s coverage=%s"
-            % (s["frames"], s["requests"], s["errors"], s["skipped_interval"],
-               s["skipped_spin"], avg, s["lat_max"], s["dedup_dropped"],
+            % (s["frames"], s["requests"], s["second_phase"], s["errors"],
+               s["skipped_interval"],
+               s["skipped_spin"], avg, s["lat_max"], srv, s["dedup_dropped"],
                s["occl_dropped"], s["cover_vetoed"], repr(self._search_term),
                s["det_counts"], s["cover_counts"]))
 

@@ -96,7 +96,7 @@ services:
       # la_detector_node sends its own per-request options anyway; these
       # are the defaults for probes and /ground.
       - GROUNDING_SAMPLING=greedy
-      - GROUNDING_GENERATION_MODE=hybrid
+      - GROUNDING_GENERATION_MODE=fast
     depends_on:
       - sim
     deploy:

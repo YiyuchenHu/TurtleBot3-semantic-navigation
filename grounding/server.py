@@ -126,6 +126,15 @@ class GroundingHandler(BaseHTTPRequestHandler):
             self._send_json(500, {"error": f"grounding failed: {exc}"})
             return
         latency_ms = (time.monotonic() - t0) * 1000.0
+        tm = getattr(self.backend, "last_timing", {}) or {}
+        # One line per request with the stage split — the R06a smoke
+        # reads these back for the latency distribution.
+        print("[timing] %s cats=%d total=%.0f vision=%.0f prefill=%.0f "
+              "decode=%.0f steps=%s boxes=%d"
+              % (path, len(categories) if path == "/detect" else 1, latency_ms,
+                 tm.get("vision_ms", 0.0), tm.get("prefill_ms", 0.0),
+                 tm.get("decode_ms", 0.0), tm.get("decode_steps", "-"), len(boxes)),
+              flush=True)
 
         width, height = _image_size(image_bytes)
         self._send_json(200, {
