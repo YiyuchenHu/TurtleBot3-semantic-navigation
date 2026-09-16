@@ -57,6 +57,23 @@ class Candidate:
     last_seen: float = 0.0
 
 
+def _marker_label(lm) -> str:
+    """RViz text: "<class>_<id> [<attr>] n<count>" — an attribute
+    expression ("person wearing a green shirt_0") shows as
+    "person_0 [green shirt] n3"; plain classes as "trash can_0 n23".
+    Display only; landmark ids are unchanged."""
+    seq = lm.landmark_id.rsplit("_", 1)[-1]
+    cls, attr = lm.semantic_class, ""
+    if " wearing a " in cls:
+        cls, attr = cls.split(" wearing a ", 1)
+    elif " wearing " in cls:
+        cls, attr = cls.split(" wearing ", 1)
+    text = "%s_%s" % (cls, seq)
+    if attr:
+        text += " [%s]" % attr
+    return "%s n%d" % (text, lm.observation_count)
+
+
 @dataclass
 class Landmark:
     landmark_id: str
@@ -1243,7 +1260,7 @@ class SemanticMapMemoryNode(Node):
             t.pose.orientation.w = 1.0
             t.scale.z = 0.15
             t.color = ColorRGBA(r=1.0, g=1.0, b=1.0, a=1.0)
-            t.text = "%s (n=%d)" % (lm.landmark_id, lm.observation_count)
+            t.text = _marker_label(lm)
             ma.markers.append(t)
             mid += 1
         self._pub.publish(ma)
