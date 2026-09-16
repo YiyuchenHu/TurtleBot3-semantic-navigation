@@ -16,7 +16,13 @@ semantic_memory_node:
 
     # EMA weight for position smoothing on matched objects.
     # Higher = new observation dominates; lower = position is stickier.
-    position_smoothing_alpha: 0.3
+    # R07: 1.0 (no smoothing). The EMA runs in base_link and mixes
+    # observations taken from different robot poses — with the map-memory
+    # TF fix each observation is now projected at its own stamp, so the
+    # mix was the last error source: bag_turn replay, memory detections
+    # inside the 2.5 m range gate on the true object 69% (alpha 0.3) vs
+    # 100% / 0.19 m median (alpha 1.0) = the localizer's own accuracy.
+    position_smoothing_alpha: 1.0
 
     # ── Aging ─────────────────────────────────────────────
     # Seconds without observation before marking an object as stale.

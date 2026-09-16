@@ -11,10 +11,12 @@ Pipeline per observation:
   5. Snap observation to nearest valid island centroid
   6. Match refined point against existing landmarks/candidates (same class + distance)
   7. Candidates promoted to persistent landmarks after min_observations
+     observations that come from at least min_distinct_observations
+     distinct (memory object id, observation stamp) pairs
   8. Publish all persistent landmarks as MarkerArray
 
 Every rejection in that pipeline (range, TF, grid bounds, no island,
-geometry, mutex) and every success (landmark merge, candidate merge, new
+geometry, mutex, promotion held for distinct detections) and every success (landmark merge, candidate merge, new
 candidate, promotion) is counted per class, together with the key numbers
 of the most recent event, and printed as one `[gate_summary]` block every
 `gate_summary_interval_sec` seconds when something changed (plus a final
@@ -55,6 +57,18 @@ class Candidate:
     y: float
     obs_count: int = 1
     last_seen: float = 0.0
+    # Distinct (memory object id, observation stamp) pairs behind
+    # obs_count. semantic_memory_node republishes every live object at
+    # 1 Hz for up to stale_timeout (5 s) after its last detection, and
+    # since the R07 TF fix those republishes land on the same map point,
+    # so obs_count counts one detection 3-6 times (R07 smoke: 5 trash-can
+    # detections -> n=27). This set is what the promotion guard reads.
+    obs_keys: set = field(default_factory=set)
+    held_logged: bool = False
+
+    @property
+    def distinct_count(self):
+        return len(self.obs_keys)
 
 
 def _marker_label(lm) -> str:
@@ -448,12 +462,33 @@ def should_relabel(class_counts, current_class, relabel_ratio,
     return best_label
 
 
+def promotion_ready(obs_count, distinct_count, min_obs, min_distinct):
+    """Pure rule: may a candidate with these counts become a landmark?
+
+    Both must hold: `obs_count` reached the class threshold (the R05
+    thresholds, tuned on the stacked 1 Hz republish counts), AND the
+    observations behind it come from at least `min_distinct` distinct
+    (memory object id, observation stamp) pairs, i.e. distinct
+    detections. Measured (R07 smoke, +214 s): two mislabelled
+    "trash can" frames on the green-shirt person became two memory
+    objects, each republished 4x onto the same map point -> n=8 in 4 s
+    from 2 real detections, promoted, and blocked the true person for
+    65 s until relabel. A real object seen from a moving robot
+    accumulates distinct stamps at the detector's request rate (bag_ab
+    barrier: 14 obs from 7 stamps), so 3 costs it nothing.
+    """
+    return obs_count >= min_obs and distinct_count >= min_distinct
+
+
 class SemanticMapMemoryNode(Node):
 
     # Rows of the gate summary, in pipeline order. The first six are the
     # rejection gates of _obs_cb (the four that used to be silent, plus the
-    # two that already log per event); the last four are the success paths.
-    GATE_ROWS = ("range", "tf", "out_of_grid", "no_island", "geometry", "mutex")
+    # two that already log per event), `held_distinct` is the promotion
+    # guard (candidate at n >= threshold but too few distinct detections);
+    # the last six are the success paths.
+    GATE_ROWS = ("range", "tf", "out_of_grid", "no_island", "geometry", "mutex",
+                 "held_distinct")
     PASS_ROWS = ("merge_landmark", "cross_evidence", "relabel",
                  "merge_candidate", "new_candidate", "promote")
     STAT_ROWS = GATE_ROWS + PASS_ROWS
@@ -482,6 +517,12 @@ class SemanticMapMemoryNode(Node):
         self.declare_parameter("merge_distance", 0.8)
         self.declare_parameter("candidate_merge_distance", 0.8)
         self.declare_parameter("min_observations", 3)
+        # Promotion guard (R07): besides the per-class min_observations a
+        # candidate needs observations from this many distinct
+        # (memory object id, observation stamp) pairs. Applies to every
+        # class, searched ones included (their threshold stays
+        # search_min_observations). See promotion_ready().
+        self.declare_parameter("min_distinct_observations", 3)
         self.declare_parameter("search_radius_cells", 15)
         self.declare_parameter("sphere_radius", 0.18)
         self.declare_parameter("text_offset_z", 0.45)
@@ -590,6 +631,11 @@ class SemanticMapMemoryNode(Node):
         self._merge_d   = self.get_parameter("merge_distance").value
         self._cand_d    = self.get_parameter("candidate_merge_distance").value
         self._min_obs   = self.get_parameter("min_observations").value
+        self._min_distinct = int(
+            self.get_parameter("min_distinct_observations").value)
+        # Observations that carry no stamp cannot be told apart, so each
+        # one gets its own key and the guard degrades to a no-op for them.
+        self._unstamped_seq = 0
         self._search_r  = self.get_parameter("search_radius_cells").value
         self._sphere_r  = self.get_parameter("sphere_radius").value
         self._text_z    = self.get_parameter("text_offset_z").value
@@ -697,9 +743,9 @@ class SemanticMapMemoryNode(Node):
             self.create_timer(summary_dt, self._log_gate_summary)
 
         self.get_logger().info(
-            "SemanticMapMemoryNode ready  merge=%.2fm  cand=%.2fm  min_obs=%d  "
+            "SemanticMapMemoryNode ready  merge=%.2fm  cand=%.2fm  min_obs=%d  min_distinct=%d  "
             "search_r=%d  wall_margin=%.2fm  min_island=%d  relabel=%s(x%.2f)"
-            % (self._merge_d, self._cand_d, self._min_obs,
+            % (self._merge_d, self._cand_d, self._min_obs, self._min_distinct,
                self._search_r, self._wall_margin_m, self._min_island,
                "on" if self._relabel_enabled else "off", self._relabel_ratio))
 
@@ -760,6 +806,15 @@ class SemanticMapMemoryNode(Node):
             src = det.header.frame_id or msg.header.frame_id or "base_link"
             obs_id = det.id or "-"
             self._stat_in[label] += 1
+            # Identity of the DETECTION behind this message: the memory
+            # object id plus the stamp of its last real observation. The
+            # 1 Hz republishes of one detection all share this key.
+            if det.header.stamp.sec or det.header.stamp.nanosec:
+                obs_key = (obs_id, det.header.stamp.sec * 1000000000
+                           + det.header.stamp.nanosec)
+            else:
+                self._unstamped_seq += 1
+                obs_key = (obs_id, -self._unstamped_seq)
 
             raw_x = det.bbox.center.position.x
             raw_y = det.bbox.center.position.y
@@ -884,24 +939,41 @@ class SemanticMapMemoryNode(Node):
             matched_cand = self._find_candidate(label, rx, ry)
             if matched_cand is not None:
                 d_c = math.hypot(matched_cand.x - rx, matched_cand.y - ry)
-                self._update_candidate(matched_cand, rx, ry, now)
+                self._update_candidate(matched_cand, rx, ry, now, obs_key)
                 class_min_obs = self._min_obs_for(label)
                 self._note("merge_candidate", label,
-                           "n=%d/%d d=%.2f pos=(%.2f,%.2f) id=%s"
-                           % (matched_cand.obs_count, class_min_obs, d_c,
-                              matched_cand.x, matched_cand.y, obs_id))
-                if matched_cand.obs_count >= class_min_obs:
+                           "n=%d/%d k=%d/%d d=%.2f pos=(%.2f,%.2f) id=%s"
+                           % (matched_cand.obs_count, class_min_obs,
+                              matched_cand.distinct_count, self._min_distinct,
+                              d_c, matched_cand.x, matched_cand.y, obs_id))
+                if promotion_ready(matched_cand.obs_count,
+                                   matched_cand.distinct_count,
+                                   class_min_obs, self._min_distinct):
                     self._note("promote", label,
-                               "n=%d pos=(%.2f,%.2f)"
+                               "n=%d k=%d pos=(%.2f,%.2f)"
                                % (matched_cand.obs_count,
+                                  matched_cand.distinct_count,
                                   matched_cand.x, matched_cand.y))
                     self._promote(matched_cand)
+                elif matched_cand.obs_count >= class_min_obs:
+                    # Count reached, distinct detections not: the stacked-
+                    # republish pattern. Logged once per candidate; the
+                    # gate summary keeps counting.
+                    detail = ("n=%d/%d but k=%d/%d distinct pos=(%.2f,%.2f) id=%s"
+                              % (matched_cand.obs_count, class_min_obs,
+                                 matched_cand.distinct_count, self._min_distinct,
+                                 matched_cand.x, matched_cand.y, obs_id))
+                    self._note("held_distinct", label, detail)
+                    if not matched_cand.held_logged:
+                        matched_cand.held_logged = True
+                        self.get_logger().info("[held] %s candidate %s" % (label, detail))
                 continue
 
             self._note("new_candidate", label,
                        "pos=(%.2f,%.2f) r=%.2f id=%s" % (rx, ry, obs_range, obs_id))
             self._candidates.append(Candidate(
-                semantic_class=label, x=rx, y=ry, obs_count=1, last_seen=now))
+                semantic_class=label, x=rx, y=ry, obs_count=1, last_seen=now,
+                obs_keys={obs_key}))
 
     def _transform_observation(self, pt_in, obs_stamp, label, obs_id):
         """base_link -> map for one observation (R07 memory TF fix).
@@ -1079,12 +1151,14 @@ class SemanticMapMemoryNode(Node):
                 "[merge_landmark] %s  n=%d  pos=(%.2f, %.2f)"
                 % (lm.landmark_id, lm.observation_count, lm.x, lm.y))
 
-    def _update_candidate(self, c, x, y, now):
+    def _update_candidate(self, c, x, y, now, obs_key=None):
         n = c.obs_count
         c.x = (c.x * n + x) / (n + 1)
         c.y = (c.y * n + y) / (n + 1)
         c.obs_count = n + 1
         c.last_seen = now
+        if obs_key is not None:
+            c.obs_keys.add(obs_key)
 
     def _record_cross_evidence(self, lm, label, x, y, now):
         """Count a disagreeing observation against `lm`, and relabel if due."""
@@ -1167,8 +1241,9 @@ class SemanticMapMemoryNode(Node):
         self._landmarks[lid] = lm
         self._candidates.remove(c)
         self.get_logger().info(
-            "[new_landmark] %s  pos=(%.2f, %.2f)  after %d obs  total=%d"
-            % (lid, lm.x, lm.y, c.obs_count, len(self._landmarks)))
+            "[new_landmark] %s  pos=(%.2f, %.2f)  after %d obs (%d distinct)  total=%d"
+            % (lid, lm.x, lm.y, c.obs_count, c.distinct_count,
+               len(self._landmarks)))
 
     def _cleanup_candidates(self):
         now = _time.time()
@@ -1199,9 +1274,9 @@ class SemanticMapMemoryNode(Node):
             self._stat_expired_max_n[c.semantic_class] = max(
                 self._stat_expired_max_n[c.semantic_class], c.obs_count)
             self._stat_expired_last[c.semantic_class] = (
-                "n=%d/%d (short %d) age=%.0fs pos=(%.2f,%.2f)"
-                % (c.obs_count, need, max(0, need - c.obs_count),
-                   now - c.last_seen, c.x, c.y))
+                "n=%d/%d k=%d/%d (short %d) age=%.0fs pos=(%.2f,%.2f)"
+                % (c.obs_count, need, c.distinct_count, self._min_distinct,
+                   max(0, need - c.obs_count), now - c.last_seen, c.x, c.y))
             self.get_logger().info(
                 "[cleanup] expired %s candidate %s"
                 % (c.semantic_class, self._stat_expired_last[c.semantic_class]))
@@ -1265,9 +1340,10 @@ class SemanticMapMemoryNode(Node):
         now = _time.time()
         if self._candidates:
             lines.append("  candidates: " + " | ".join(
-                "%s n=%d/%d age=%.0fs (%.2f,%.2f)"
+                "%s n=%d/%d k=%d/%d age=%.0fs (%.2f,%.2f)"
                 % (c.semantic_class, c.obs_count,
                    self._min_obs_for(c.semantic_class),
+                   c.distinct_count, self._min_distinct,
                    now - c.last_seen, c.x, c.y)
                 for c in self._candidates))
         if self._landmarks:

@@ -87,15 +87,15 @@ semantic_map_memory_node:
     # memory message arrived", up to 1 s + the 5 s stale window after the
     # measurement; R06a audit on a 61 s turning bag: on-object 82% -> 68%.
     # If the stamp is not in the TF buffer the lookup falls back to
-    # Time(0) (counted in the gate summary's [tf_match] line). NOTE:
+    # Time(0) (counted in the gate summary's [tf_match] line).
     # tf_stamp_timeout is an upper bound on blocking, not a useful wait —
     # this node spins single-threaded and the TransformListener shares
     # that executor, so no /tf can arrive while the callback waits (R07
-    # review); 0.0 is the equivalent non-blocking choice. R07 smoke:
-    # stamped 222, fallback 0. tf_stamped_lookup: false restores the
-    # R06a behaviour.
+    # review); 0.0 = non-blocking, chosen as the final demo config (R07
+    # smoke at 0.1: stamped 222, fallback 0 — the wait never did anything).
+    # tf_stamped_lookup: false restores the R06a behaviour.
     tf_stamped_lookup:        true
-    tf_stamp_timeout:         0.1
+    tf_stamp_timeout:         0.0
     publish_rate:             1.0
 
     # ── Landmark matching ──────────────────────────────────
@@ -132,6 +132,21 @@ semantic_map_memory_node:
     # only promotion latency. The YOLO path is unaffected: person /
     # bench / stop sign all have explicit overrides below.
     min_observations:         8
+    # Promotion guard (R07 final): on top of the count threshold, a
+    # candidate's observations must come from at least this many distinct
+    # (memory object id, observation stamp) pairs = distinct detections.
+    # semantic_memory_node republishes each live object at 1 Hz for up to
+    # 5 s after its last detection, and since the memory TF fix those
+    # republishes stack on one map point, so n counts one detection 3-6
+    # times (R07 smoke: 5 trash-can detections -> n=27). The R07 smoke
+    # ghost: 2 mislabelled "trash can" frames on the green-shirt person ->
+    # 2 memory objects x 4 republishes = n=8 in 4 s -> promoted, blocked
+    # the real person for 65 s until relabel. With k>=3 that candidate is
+    # held (log "[held]", gate row held_distinct). Real objects clear it
+    # trivially (bag_ab barrier: n=14 from 7 stamps). Applies to every
+    # class including the active search expression (search threshold 3
+    # stays; it now means 3 distinct frames instead of 3 republishes).
+    min_distinct_observations: 3
 
     # ── Obstacle island search ─────────────────────────────
     # Search window radius in grid cells around the observation.
