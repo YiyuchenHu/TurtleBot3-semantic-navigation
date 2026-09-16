@@ -90,6 +90,13 @@ services:
       # startup. Keep this on — and never clear the cache or change the
       # model revision (R01 §5.10-7).
       - HF_HUB_OFFLINE=1
+      # R06a: deterministic detection. Greedy = argmax with the model
+      # card's T/top_p sharpening kept (temperature 0 breaks this
+      # checkpoint's MTP decoder — see backends/locate_anything.py).
+      # la_detector_node sends its own per-request options anyway; these
+      # are the defaults for probes and /ground.
+      - GROUNDING_SAMPLING=greedy
+      - GROUNDING_GENERATION_MODE=hybrid
     depends_on:
       - sim
     deploy:

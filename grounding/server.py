@@ -8,11 +8,20 @@ Exposes a grounding model to the ROS stack over JSON:
             "width": w, "height": h, "backend": str, "latency_ms": f}
     POST /detect   {"image": "<base64 jpeg/png>", "categories": ["person", ...]}
         -> {"detections": [{"bbox_xyxy": [...], "score": f, "label": s}, ...],
-            "width": w, "height": h, "backend": str, "latency_ms": f}
+            "width": w, "height": h, "backend": str, "latency_ms": f,
+            "timing": {...}}
         Fixed-vocabulary detection: every returned label is one of the
         requested category strings, verbatim. Boxes the model groups
         under a tag that matches no requested category are dropped
         (logged), so the caller's vocabulary is authoritative.
+
+    Both POST routes accept an optional "options" object overriding the
+    locate_anything generation options for that request only
+    (generation_mode / do_sample / temperature / top_p /
+    repetition_penalty / max_new_tokens / max_side — see
+    backends/locate_anything.py DEFAULT_OPTIONS). The server-wide
+    defaults are set by CLI flags and reported by GET /health. "timing"
+    is the per-stage breakdown of the last generate (R06a profiling).
 
 Usage:
     python3 server.py --backend locate_anything --port 8801   # GPU box
@@ -27,6 +36,7 @@ import argparse
 import base64
 import binascii
 import json
+import os
 import struct
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -88,6 +98,9 @@ class GroundingHandler(BaseHTTPRequestHandler):
                               if str(c).strip()]
                 if not categories:
                     raise KeyError("categories")
+            options = payload.get("options") or None
+            if options is not None and not isinstance(options, dict):
+                raise ValueError("options must be an object")
             image_bytes = base64.b64decode(image_b64, validate=True)
         except (KeyError, TypeError, ValueError, binascii.Error,
                 json.JSONDecodeError) as exc:
@@ -97,14 +110,17 @@ class GroundingHandler(BaseHTTPRequestHandler):
         t0 = time.monotonic()
         try:
             if path == "/ground":
-                boxes = self.backend.ground(image_bytes, query)
+                boxes = self.backend.ground(image_bytes, query, options=options)
                 # Referring output carries no usable <ref> label (prompt
                 # echo); the query phrase is the label by construction.
                 for b in boxes:
                     if not b.get("label"):
                         b["label"] = query
             else:
-                boxes = self._detect(image_bytes, categories)
+                boxes = self._detect(image_bytes, categories, options)
+        except ValueError as exc:
+            self._send_json(400, {"error": f"bad request: {exc}"})
+            return
         except Exception as exc:
             # Surface model errors as 500 but keep serving.
             self._send_json(500, {"error": f"grounding failed: {exc}"})
@@ -118,16 +134,18 @@ class GroundingHandler(BaseHTTPRequestHandler):
             "height": height,
             "backend": self.backend.info()["backend"],
             "latency_ms": round(latency_ms, 1),
+            "timing": getattr(self.backend, "last_timing", {}),
         })
 
-    def _detect(self, image_bytes: bytes, categories: list[str]) -> list[dict]:
+    def _detect(self, image_bytes: bytes, categories: list[str],
+                options: dict | None = None) -> list[dict]:
         """Run the backend's detect and enforce the caller's vocabulary:
         each box's raw <ref> label is matched case-insensitively against
         the requested categories and replaced by the matching category
         string verbatim; unmatched labels are dropped and logged."""
         canonical = {c.lower(): c for c in categories}
         kept, dropped = [], []
-        for box in self.backend.detect(image_bytes, categories):
+        for box in self.backend.detect(image_bytes, categories, options=options):
             cat = canonical.get(str(box.get("label", "")).strip().lower())
             if cat is None:
                 dropped.append(box.get("label"))
@@ -166,6 +184,24 @@ def main() -> None:
                          "(Turing has no native bf16).")
     ap.add_argument("--model", default=None,
                     help="override HF model id for locate_anything")
+    # locate_anything generation defaults (R06a). Each is also overridable
+    # per request through the "options" payload field.
+    # Defaults come from the environment so compose can set them without
+    # an image rebuild (GROUNDING_GENERATION_MODE / GROUNDING_SAMPLING /
+    # GROUNDING_MAX_NEW_TOKENS / GROUNDING_MAX_SIDE).
+    env = os.environ.get
+    ap.add_argument("--generation-mode",
+                    default=env("GROUNDING_GENERATION_MODE", "hybrid"),
+                    choices=["fast", "slow", "hybrid"],
+                    help="MTP-only / AR-only / MTP with AR fallback (default)")
+    ap.add_argument("--sampling", default=env("GROUNDING_SAMPLING", "sample"),
+                    choices=["sample", "greedy"],
+                    help="model-card sampling (T=0.7, top_p 0.9) or greedy argmax")
+    ap.add_argument("--max-new-tokens", type=int,
+                    default=int(env("GROUNDING_MAX_NEW_TOKENS", "2048")))
+    ap.add_argument("--max-side", type=int, default=int(env("GROUNDING_MAX_SIDE", "0")),
+                    help="downscale the input so its longer side is <= N px "
+                         "(0 = native); boxes come back in original pixels")
     args = ap.parse_args()
 
     kwargs = {"device": args.device}
@@ -173,6 +209,10 @@ def main() -> None:
     # it is not passed there — keeps `--help` honest about what applies.
     if args.backend == "locate_anything":
         kwargs["dtype"] = args.dtype
+        kwargs["options"] = dict(generation_mode=args.generation_mode,
+                                 do_sample=(args.sampling == "sample"),
+                                 max_new_tokens=args.max_new_tokens,
+                                 max_side=args.max_side)
     if args.model:
         kwargs["model_id"] = args.model
     backend = get_backend(args.backend, **kwargs)
