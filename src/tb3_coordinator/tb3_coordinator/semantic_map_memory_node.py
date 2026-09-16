@@ -686,8 +686,19 @@ class SemanticMapMemoryNode(Node):
         """Promotion threshold for `label`, honoring an active search.
 
         The search override applies only while the expression is active;
-        an already-promoted landmark is never demoted when it ends."""
-        if self._search_label is not None and label == self._search_label:
+        an already-promoted landmark is never demoted when it ends.
+
+        The low search threshold is for classes the detector CANNOT see
+        most of the time — open-vocabulary expressions outside the base
+        vocabulary, whose recall is the binding constraint (R05: 6 of 60
+        frames carry a green-shirt box). A searched class that is in the
+        base vocabulary is seen continuously and keeps its normal
+        threshold: measured (R05 B1) with 3 for everything, a bookshelf
+        search promoted a ghost on the blue-shirt person at n=3 and the
+        robot drove to the person, while the real bookshelf reached n=8
+        in the same run."""
+        if self._search_label is not None and label == self._search_label \
+                and label.lower() not in self._observable:
             return self._search_min_obs
         return self._class_min_obs.get(label, self._min_obs)
 

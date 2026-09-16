@@ -160,14 +160,19 @@ semantic_map_memory_node:
     # and exploration may give the object only one viewing pass — R02b
     # §5.1 measured sparse-view candidates expiring at 7/8. 5 still
     # rejects the run-1 ghost pattern (3 stray observations).
-    # R05: 5 -> 3. The R04 rationale (filter the run-1 ghost pattern of
-    # 3 stray observations) is now carried by three newer gates the
-    # promotion path did not have: the localizer height gate, the
-    # detector containment veto and the same-family exemption. What 5
-    # costs is recall: the low camera sees a colored shirt in only ~10%
-    # of frames (R05 probe: 6/60 frames carry a green-expression box,
-    # all of them correct), and after the range/edge/height gates a
-    # 13-minute search accumulated 26 observations without reaching 5.
+    # R05: 5 -> 3, and it now applies ONLY to searched classes outside
+    # the base vocabulary (open-vocabulary expressions). Those are the
+    # recall-bound ones: the low camera shows a colored shirt in ~10% of
+    # frames (R05 probe: 6/60 frames carry a green-expression box, all
+    # correct), and after the range/edge/height gates a 13-minute search
+    # reached only 26 observations — never 5. At 3 the same search
+    # promoted at 0.15 m from the true person. The R04 rationale for 5
+    # (filter the 3-stray-observation ghost pattern) is now carried by
+    # the localizer height gate, the detector containment veto and the
+    # same-family exemption. Searched classes that ARE in the base
+    # vocabulary keep their normal threshold — they are observed
+    # continuously, and at 3 a bookshelf search promoted a ghost on the
+    # blue-shirt person while the real shelf reached n=8 (R05 B1).
     search_min_observations:   3
     # Candidate expiry for the ACTIVE search class only. The generic
     # candidate_timeout (45 s) assumes the mapping path's steady stream;
