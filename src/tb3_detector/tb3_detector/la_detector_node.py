@@ -154,6 +154,97 @@ def dedup_cross_class(dets: list[dict], priority: dict[str, int],
     return kept, dropped
 
 
+class BoxTracker:
+    """Short-term tracks over consecutive /detect results (R06a step 6):
+    IoU association after shifting every live track by the yaw change
+    since its last frame (the same linear pixel<->bearing model the
+    localizer uses). Same-family labels (token subset, e.g. "person" and
+    "person wearing a green shirt") may share a track; the track keeps
+    the label it was created with. Tracks that miss `max_missed`
+    consecutive results or fall silent for `max_age_sec` are closed and
+    their length (number of results they were seen in) recorded.
+
+    Deliberately NOT ByteTrack (course repo 35cd85d, reverted in
+    c6e2ea2): there the track id was used by tb3_memory to merge
+    observations the 1 m distance gate would have rejected, positions
+    wandered and landmark confirmation took twice as long. Here the id
+    only annotates Detection2D.id; memory logic is unchanged.
+    """
+
+    def __init__(self, px_per_rad: float, iou_min: float = 0.3,
+                 max_missed: int = 2, max_age_sec: float = 2.0) -> None:
+        self.px_per_rad = px_per_rad
+        self.iou_min = iou_min
+        self.max_missed = max_missed
+        self.max_age_sec = max_age_sec
+        self.tracks: list[dict] = []
+        self.next_id = 1
+        self.closed_lengths: list[int] = []
+        self.created = 0
+
+    def _predict(self, tr: dict, yaw: float | None) -> list[float]:
+        b = tr["bbox"]
+        if yaw is None or tr["yaw"] is None:
+            return list(b)
+        dpsi = (yaw - tr["yaw"] + math.pi) % (2.0 * math.pi) - math.pi
+        du = dpsi * self.px_per_rad
+        return [b[0] + du, b[1], b[2] + du, b[3]]
+
+    def update(self, dets: list[dict], t: float, yaw: float | None) -> None:
+        """Assign `d["track_id"]` to every detection in place."""
+        preds = [(tr, self._predict(tr, yaw)) for tr in self.tracks]
+        cands = []
+        for i, d in enumerate(dets):
+            for j, (tr, pb) in enumerate(preds):
+                if not labels_agree(tr["label"], d["label"]):
+                    continue
+                v = iou_xyxy(d["bbox_xyxy"], pb)
+                if v >= self.iou_min:
+                    cands.append((v, i, j))
+        cands.sort(reverse=True)
+        used_d, used_t = set(), set()
+        for v, i, j in cands:
+            if i in used_d or j in used_t:
+                continue
+            used_d.add(i); used_t.add(j)
+            tr = self.tracks[j]
+            tr.update(bbox=list(dets[i]["bbox_xyxy"]), yaw=yaw, t=t,
+                      hits=tr["hits"] + 1, missed=0)
+            dets[i]["track_id"] = tr["id"]
+        for i, d in enumerate(dets):
+            if i in used_d:
+                continue
+            tr = dict(id=self.next_id, label=d["label"], bbox=list(d["bbox_xyxy"]),
+                      yaw=yaw, t=t, hits=1, missed=0)
+            self.next_id += 1
+            self.created += 1
+            self.tracks.append(tr)
+            d["track_id"] = tr["id"]
+        alive = []
+        for j, tr in enumerate(self.tracks):
+            if j not in used_t and tr["t"] < t:
+                tr["missed"] += 1
+            if tr["missed"] > self.max_missed or t - tr["t"] > self.max_age_sec:
+                self.closed_lengths.append(tr["hits"])
+            else:
+                alive.append(tr)
+        self.tracks = alive
+
+    def length_histogram(self) -> dict:
+        lens = self.closed_lengths + [tr["hits"] for tr in self.tracks]
+        if not lens:
+            return {}
+        bins = {"1": 0, "2": 0, "3-5": 0, "6-10": 0, "11-20": 0, ">20": 0}
+        for n in lens:
+            k = ("1" if n == 1 else "2" if n == 2 else "3-5" if n <= 5
+                 else "6-10" if n <= 10 else "11-20" if n <= 20 else ">20")
+            bins[k] += 1
+        bins["n_tracks"] = len(lens)
+        bins["median"] = sorted(lens)[len(lens) // 2]
+        bins["max"] = max(lens)
+        return bins
+
+
 class LaDetectorNode(Node):
 
     def __init__(self) -> None:
@@ -246,6 +337,14 @@ class LaDetectorNode(Node):
         # yaw change since their image (odom), so during a turn the boxes
         # stay on the objects for the ~0.4 s the next /detect takes.
         self.declare_parameter("debug_motion_comp", True)
+        # ── Short-term tracking (R06a step 6) ────────────────────────
+        # IoU association across consecutive results after yaw
+        # compensation; fills Detection2D.id ("<n>"). Annotation only —
+        # memory does not read it (see BoxTracker on why).
+        self.declare_parameter("tracking_enabled", True)
+        self.declare_parameter("track_iou_min", 0.3)
+        self.declare_parameter("track_max_missed", 2)
+        self.declare_parameter("track_max_age_sec", 2.0)
         self.declare_parameter("jpeg_quality", 85)
         self.declare_parameter("queue_size", 5)
         self.declare_parameter("stats_interval_sec", 10.0)
@@ -290,6 +389,12 @@ class LaDetectorNode(Node):
         self._pub_debug = bool(g("publish_debug_image"))
         self._debug_stale_after = float(g("debug_stale_after_sec"))
         self._debug_motion_comp = bool(g("debug_motion_comp"))
+        self._tracking = bool(g("tracking_enabled"))
+        self._tracker = BoxTracker(
+            px_per_rad=320.0 / self._half_hfov,   # updated on first image
+            iou_min=float(g("track_iou_min")),
+            max_missed=int(g("track_max_missed")),
+            max_age_sec=float(g("track_max_age_sec")))
         self._jpeg_quality = int(g("jpeg_quality"))
         queue = int(g("queue_size"))
         self._stats_interval = float(g("stats_interval_sec"))
@@ -570,6 +675,11 @@ class LaDetectorNode(Node):
             dets = kept
         dets, dropped = dedup_cross_class(dets, self._priority, self._cross_iou)
         self._st["dedup_dropped"] += dropped
+        if self._tracking:
+            self._tracker.px_per_rad = (bgr.shape[1] / 2.0) / self._half_hfov
+            self._tracker.update(
+                dets, header.stamp.sec + header.stamp.nanosec * 1e-9,
+                pose[2] if pose else None)
         for d in dets:
             self._st["det_counts"][d["label"]] = \
                 self._st["det_counts"].get(d["label"], 0) + 1
@@ -660,6 +770,8 @@ class LaDetectorNode(Node):
             # The model emits no confidence; server score is a constant.
             hyp.hypothesis.score = float(d.get("score", 1.0))
             det.results.append(hyp)
+            if "track_id" in d:
+                det.id = str(d["track_id"])
             x1, y1, x2, y2 = d["bbox_xyxy"]
             det.bbox.center.position.x = (x1 + x2) / 2.0
             det.bbox.center.position.y = (y1 + y2) / 2.0
@@ -707,7 +819,8 @@ class LaDetectorNode(Node):
             for d in ov["dets"]:
                 x1, y1, x2, y2 = shifted(d["bbox_xyxy"])
                 cv2.rectangle(vis, (x1, y1), (x2, y2), det_color, 2)
-                cv2.putText(vis, d["label"], (x1, max(y1 - 6, 12)),
+                text = d["label"] + (" #%d" % d["track_id"] if "track_id" in d else "")
+                cv2.putText(vis, text, (x1, max(y1 - 6, 12)),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.55, det_color, 2)
             # Age of the boxes' SOURCE IMAGE (result age + round trip):
             # that is the interval the yaw shift covers.
@@ -749,6 +862,11 @@ class LaDetectorNode(Node):
                avg, s["lat_max"], srv, s["dedup_dropped"],
                s["occl_dropped"], s["cover_vetoed"], repr(self._search_term),
                s["det_counts"], s["cover_counts"]))
+        if self._tracking:
+            self.get_logger().info(
+                "[track_stats] tracks=%d alive=%d lengths(results seen)=%s"
+                % (self._tracker.created, len(self._tracker.tracks),
+                   self._tracker.length_histogram()))
 
 
 def main(args=None):

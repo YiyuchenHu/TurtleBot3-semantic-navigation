@@ -206,6 +206,20 @@ la_detector_node:
     # for the ~0.4 s a /detect takes; with compensation they stay on
     # the objects. Set false for the raw overlay.
     debug_motion_comp: true
+
+    # ── Short-term tracking (R06a step 6) ───────────────────
+    # IoU >= track_iou_min association across consecutive results after
+    # the same yaw compensation; Detection2D.id carries the track number
+    # (annotation only — memory does not read it: the course repo's
+    # ByteTrack attempt, 35cd85d/c6e2ea2, let ids override the 1 m
+    # distance gate and doubled landmark confirmation time). A track is
+    # closed after track_max_missed consecutive misses or
+    # track_max_age_sec of silence; [track_stats] logs the length
+    # distribution.
+    tracking_enabled: true
+    track_iou_min: 0.3
+    track_max_missed: 2
+    track_max_age_sec: 2.0
     jpeg_quality: 85
     queue_size: 5
     # One [la_stats] summary line per this many seconds (0 disables).
