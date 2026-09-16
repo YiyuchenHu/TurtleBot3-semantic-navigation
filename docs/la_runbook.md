@@ -33,8 +33,10 @@ flowchart LR
 ```
 
 搜索链路一句话：查询词不在 memory 时，coordinator 把该词经 `/active_search` 注入
-la_detector 的 detect 词表（最高去重优先级）并开探索；semantic_memory 对搜索类把晋升
-门槛从 8 降到 5；landmark 出现后 coordinator 暂停探索、重发原命令走正常导航链。
+la_detector 的 detect 词表（最高去重优先级）并开探索；semantic_memory 对**词表外的**
+搜索类把晋升门槛降到 3；landmark 出现后 coordinator 暂停探索、重发原命令走正常导航链。
+R05 起：探索干涸后不直接放弃，先跑 4 轮**巡逻扫视**（§7.3）；与搜索词同族的基础词条
+在搜索期**临时挂起**，免得通用词把细粒度表达式票数压死。
 
 ## 2. 前置检查
 
@@ -93,7 +95,7 @@ ros2 launch tb3_coordinator full_semantic_nav_la.launch.py \
 启动就绪判据（launch 后 ~25–40 s 内依次出现）：
 
 ```
-[la_detector_node]: la_detector_node ready. server=http://127.0.0.1:8801 vocabulary=['person', 'bookshelf', 'trash can', 'traffic cone'] ...
+[la_detector_node]: la_detector_node ready. server=http://127.0.0.1:8801 vocabulary=['person', 'bookshelf', 'trash can', 'traffic cone', 'concrete barrier'] ...
 [bt_navigator]: Begin navigating ...      ← 或探索开始、机器人在 Gazebo 里动起来
 [la_detector_node]: [la_stats] frames=... requests=... errors=0 ...
 ```
@@ -107,38 +109,34 @@ x11grab 抓的是**区域内最顶层的像素**——目标窗口没铺满录�
 报废过一条，成片前必须逐段抽帧扫描）。录屏期间不要在同一屏幕上干别的，**先关掉
 通知弹窗**（微信等常驻通知会飘在最上层）。
 
-### 5.1 RViz 录屏布局（R04 起）
+### 5.1 RViz 录屏布局（R04 起，R05 改紧凑版）
 
 launch 默认加载 `src/tb3_coordinator/rviz/la_demo.rviz`：只有地图视图
 （SLAM 地图 + landmark MarkerArray + 机器人 + Nav2 路径）和一块**浮动的**
 la_detector debug image 大面板，Displays/Views/Tool Properties/Time 全部隐藏。
-保存的窗口几何按"6144 宽主屏右半"设计：主窗口 (3072,0) 3040×1830，浮动面板
-(3072,1905) 3040×1500。要全套调试面板时传
-`rviz_config:=<绝对路径>/semantic_nav.rviz`。
+要全套调试面板时传 `rviz_config:=<绝对路径>/semantic_nav.rviz`。
 
-### 5.2 摆窗与录制（左 Gazebo / 右 RViz 各半屏）
+### 5.2 摆窗与录制（R05 管线：scripts/record_demo.sh）
 
-```bash
-# 容器里（有 xdotool）；Gazebo 必须铺满左半屏，否则桌面从缝里漏进录像
-docker compose -f docker/compose.yaml -f docker/compose.local.yaml exec sim bash -c '
-export DISPLAY=:1 XAUTHORITY=/tmp/.host_xauth
-GZ=$(xdotool search --class gazebo | while read w; do [ "$(xdotool getwindowname $w)" = Gazebo ] && echo $w && break; done)
-xdotool windowmove $GZ 0 0; xdotool windowsize $GZ 3072 3406; xdotool windowraise $GZ'
-```
-
-录制（宿主机，整块主屏缩到 1080p）：
+**R04 管线（整屏抓取 + libx264）产出的是 ~4 fps 的幻灯片**——R05 逐帧 YDIF 实测
+raw_R04_G3 有效帧率 3.9 fps。凶手不是编码器而是 gzclient 本身：它的重绘率与窗口
+面积成反比（~45 MP/s 吞吐上限），3072×3406 的大窗只能画 4-5 fps；同管线抓 400×400
+的 glxgears 能到 55/60 fps。修法 = 三窗口缩小平铺一块**原生 1920×1080 区域**
+（零缩放）+ GPU 编码（h264_nvenc），实测行驶中有效帧率 26-29 fps。
 
 ```bash
-ffmpeg -f x11grab -framerate 24 -video_size 6144x3456 -i :1.0+0,0 \
-  -vf scale=1920:1080 -c:v libx264 -preset veryfast -crf 22 -pix_fmt yuv420p \
-  reports/media/raw_demo.mp4
+# 起栈后（Nav2 激活、三窗口都已出现）：
+scripts/record_demo.sh arrange          # 摆窗：Gazebo 960x1080 左列，RViz/debug 各 960x540 右列
+scripts/record_demo.sh record reports/media/raw_demo.mp4 900 &   # 30fps NVENC，开录 3s 后自动存首帧检查图
+# 结束：Ctrl+C / kill -INT 录制进程；然后全扫：
+scripts/record_demo.sh check reports/media/raw_demo.mp4          # 15s 间隔抽帧到 *_scan/，逐帧目检
 ```
 
-**开始录制后立刻抽一帧目检**，结束后再按 15 s 间隔抽帧全扫一遍（R04 规约）：
-
-```bash
-ffmpeg -y -sseof -1 -i reports/media/raw_demo.mp4 -frames:v 1 /tmp/check.jpg && xdg-open /tmp/check.jpg
-```
+摆窗细节都在脚本里：窗口识别要挑**客户窗**（RViz 会有一个带 "(on <容器id>)" 的
+WM 框架窗同名混进搜索结果，对它 move/resize 全是无效操作）；xdotool 的
+getwindowgeometry 会叠加虚假的边框偏移，脚本以宿主机 `xwininfo` 的绝对坐标为真值
+迭代收敛；WM 拒绝把带装饰的窗放到 y<138，所以布局锚定在 (0,138)。
+录制区域 = 三窗口平铺的精确矩形，区域外的桌面永远不入镜。
 
 gzclient 偶发全屏灰屏（第二次起栈时出现过）：`pkill gzclient` 后在容器里
 `gzclient &` 重开即可，世界与 gzserver 不受影响。
@@ -160,14 +158,27 @@ cd ~/Desktop/Github_Project/TurtleBot3-semantic-navigation
 
 | profile | 文件（src/tb3_detector/config/） | 词表 | 用途 |
 |---|---|---|---|
-| **默认（R04 起）** | `la_detector.yaml` | **空**（coverage 带 4 类 + 4 色衬衫表达式） | search-first 演示形态：平时什么都不建图，**每条命令都走搜索链路** |
-| 四类建图 | `la_detector_four_class.yaml` | person + bookshelf + trash can + traffic cone | R04 前的默认：四类在探索中直接建图，搜索只对词表外词触发 |
+| **默认（R05 起）** | `la_detector.yaml` | 5 物理类（person + bookshelf + trash can + traffic cone + concrete barrier） | **建图 + 搜索**：注册表类探索中直接建图、重复命令 memory 直达；颜色表达式与注册表外词走搜索链路 |
+| search-first | `la_detector_search_first.yaml` | **空**（coverage 带 5 类 + 4 色衬衫表达式） | R04 演示形态：平时什么都不建图，每条命令都走搜索链路 |
+| 四类建图 | `la_detector_four_class.yaml` | person + bookshelf + trash can + traffic cone | R04 前的默认（历史存档，无 barrier） |
 | R02c 验收 | `la_detector_person_only.yaml` | 仅 person | R02c 搜索链路验收配置（历史存档） |
 
-search-first 的 coverage 里多了 4 条衬衫颜色表达式（green/red/blue/white）——这不是装饰：
-R04 探针实测，只注入 "person wearing a green shirt" + person 时模型会把**错误颜色**的人
-强制匹配成该表达式（score 恒 1.0，6/6 阴性全错）；把其它颜色作为正确备选项一起请求后
-同一组 case 12/12 全对（`reports/R04_probe/`）。颜色搜索能"说不"全靠它们。
+两个 profile 的 coverage 里都有 4 条衬衫颜色表达式（green/red/blue/white）——这不是装饰：
+* R04 探针实测，只注入 "person wearing a green shirt" + person 时模型会把**错误颜色**的人
+  强制匹配成该表达式（score 恒 1.0，6/6 阴性全错）；把其它颜色作为正确备选项一起请求后
+  同一组 case 12/12 全对（`reports/R04_probe/`）。颜色搜索能"说不"全靠它们。
+* R05 又实测了第二个作用：**颜色撞车保护**。橙色的 traffic cone 标签会强制匹配红衣人、
+  绿色的 trash can 标签会强制匹配绿衣人（框直接打在人身上、尺寸正确，几何滤波全部失效）；
+  彩衣人自己的表达式 coverage 框与这些错标签框不一致 → veto 掉。没有它们，~10 分钟探索
+  就在红衣人身上晋升了 "traffic cone" 假 landmark、绿衣人身上晋升了 "trash can"。
+
+**为什么颜色表达式不直接进词表建图**（R05 步骤 3 试过、两次冒烟失败后回退）：
+远处人的表达式框中心列扫到近处物体时按近距落点（R04 §4.4 机理），高度闸（§7.3）能拦；
+但"框直接打在目标身上的错标签"（上述颜色撞车 + 蓝表达式在 dedup 里吃掉白衣人的 person
+标签）没有几何特征可拦，memory 层会长出改不回来的错色 landmark。证据：
+`reports/demo/stack_R05_smoke2_expr_vocab.log`（5 个 landmark 中 4 个是鬼影）。
+结果：彩衣人建图归 "person" 类；"find the person wearing a X shirt" 永远走搜索注入
+（R04 验收路径），即使已经路过过它。
 
 切换 = 重启栈时给 `detector_config` 参数（先 Ctrl+C 关旧栈，见 §11；新栈 = 全新 memory）：
 
@@ -178,7 +189,8 @@ ros2 launch tb3_coordinator full_semantic_nav_la.launch.py \
   2>&1 | tee ~/ws/reports/demo/stack.log
 ```
 
-就绪行的 `vocabulary=[...]` 是确认 profile 生效的判据（默认 profile 显示 `vocabulary=[]`）。
+就绪行的 `vocabulary=[...]` 是确认 profile 生效的判据（R05 默认 profile 显示 5 个类；
+search-first 显示 `vocabulary=[]`）。
 
 ### 7.1 到达后保持（hold_after_goal，R04 起默认开）
 
@@ -204,13 +216,46 @@ launch 时给 coordinator 传 `hold_after_goal:=false`（参数在
 world 里的三个彩衣 person（绿=中心、蓝=NE、红=SE）由
 `scripts/make_person_variants.py` 生成（生成物 gitignore，重建镜像后重跑一次即可）。
 
+### 7.3 R05 的 world 与感知链新增
+
+* **jersey barrier**（西墙，4.07 m 长）：镜像构建期烤入（docker/Dockerfile.sim 末层），
+  注册表类 `traffic_barrier`，命令说法 "go to the traffic barrier / jersey barrier /
+  barrier"。**detector_label 是 "concrete barrier"**——离线探针 60 帧里
+  "traffic barrier" 0 检出、"concrete barrier" 7 帧全对（`reports/R05_probe/`）。
+  两个白衣人从 (-2,±2) 角落内移到 (-1.2,±1.8) 给 barrier 让位。
+* **高度-距离一致性闸**（localizer，`height_gate_*` 参数）：bbox 高度远小于
+  "该类真实高度在射线距离处应有的像素高" → 判定为"远框配了近射线"（误定位）丢弃。
+  单侧设计：框偏高 = 近距截断，不拒。R05 冒烟 1/2 里它拦掉了 200+ 次误定位观测
+  （日志行 `[height_gate] dropped per class`）。先验表在
+  `src/tb3_localizer/config/localizer.yaml`（含 person 家族回退）。
+* **debug image 相机帧率化**（detector）：/detect 挪到工作线程，debug 图每帧发布
+  （~20 Hz），叠最近一次检测框；框龄 >1.5 s 变灰并标 `(STALE)`。检测节奏不变
+  （2.05 Hz / 457 ms 实测同 R04）。
+* **搜索巡逻**（coordinator，`search_patrol_*`）：探索干涸后不再 15 s 秒放弃，而是依次
+  开到 4 个室内象限点、每点原地慢旋扫视 14 s，预算用完才 NOT FOUND。日志判据
+  `[patrol] round n/4 for '<label>' → waypoint (x, y)`。
+* **同族标签共存**（detector + memory）：搜索期与搜索词同族（token 子集）的基础词条
+  **临时挂起**（掉回 coverage，仍参与遮挡滤波与 veto）；memory 侧同族标签不互为反对
+  证据、不互为候选 mutex。没有这两条，词表里的 `person` 会以 503:18 的观测票数压死绿衣
+  表达式，且表达式观测会被中心的 person landmark 吞成"反对证据"。
+* **搜索晋升门槛分档**：词表**外**的开放词汇表达式用 3（彩衣可见帧只有约 10%），
+  词表**内**的类保持常规门槛——B1 实测一刀切成 3 时，书架搜索会在蓝衣人身上以 n=3
+  晋升鬼影，机器人开过去"成功"但语义全错。
+* **包含关系 veto**（detector，`coverage_containment`）：可发布框有 ≥80% 面积落在标签
+  不一致的 coverage 框内 → 判为"局部-整体错标"丢弃（绿衬衫局部被标 trash can 那类）。
+* **类级合并半径**（memory，`class_merge_overrides`）：物理尺寸大的类（barrier 2.2 m）
+  用自己的合并半径，否则真观测沿 4 m 躯体散布、被切成攒不满的候选。
+
 ## 8. 演示剧本（建议顺序）
 
-> R04 起默认 profile 是 search-first（§7），本节的 R04 版剧本 =
-> 三条命令各一栈（每栈全新 memory，起点 ≥1.2 m 净空）：
-> ① `find the person wearing a green shirt`（搜索→彩衣分辨→REACHED→IDLE 停住）
-> ② `find the bookshelf`（搜索→REACHED→IDLE）
-> ③ `find a bicycle`（探索完成→NOT FOUND→IDLE，零幽灵）。
+> **R05 版剧本（当前默认 profile）= 一栈四命令、同一 memory**（陌生起点，≥1.2 m 净空）：
+> ① `find the person wearing a green shirt`（搜索注入→彩衣分辨→REACHED→IDLE；
+>    期间探索顺带把注册表类建进 memory）
+> ② `go to the bookshelf`（已建图 → memory 直达；未建图 → 继续探索）
+> ③ `go to the traffic barrier`（同上；detector_label 是 concrete barrier，§7.3）
+> ④ `find a bicycle`（NOT FOUND→IDLE，零幽灵）。
+> R04 版剧本（search-first，三条命令各一栈）切
+> `detector_config:=.../la_detector_search_first.yaml`。
 > R04 实测：绿衣 103–223 s、书架 225 s、bicycle 否定 705 s。
 > 下面的四段旧剧本基于四类建图 profile，跑它先切
 > `detector_config:=.../la_detector_four_class.yaml`。
