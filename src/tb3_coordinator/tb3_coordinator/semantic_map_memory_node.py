@@ -376,6 +376,26 @@ def check_geometry_consistency(
     return True, "no geometry check for class '%s'" % label
 
 
+def labels_same_family(a, b):
+    """True when one label's tokens are a subset of the other's.
+
+    "person" vs "person wearing a green shirt" describe the SAME object
+    at different specificity — not a labeling conflict. R05 A3 measured
+    what happens without this: the default profile maps the centre
+    person as `person`, and every observation of the injected search
+    expression then landed inside that landmark's evidence radius and
+    was filed as evidence AGAINST its label, so the search candidate
+    never existed and 4 patrol rounds later the search reported NOT
+    FOUND on a person it was looking straight at. Family members are
+    allowed to co-exist as separate landmarks at one spot: one per
+    name, which is what lets "go to the person" and "find the person
+    wearing a green shirt" both resolve. (The detector has the same
+    exemption in its coverage veto, `labels_agree`.)
+    """
+    ta, tb = set(str(a).split()), set(str(b).split())
+    return ta <= tb or tb <= ta
+
+
 def should_relabel(class_counts, current_class, relabel_ratio,
                    class_min_obs, default_min_obs=3):
     """Pure rule: which label should replace `current_class`, or None.
@@ -511,6 +531,16 @@ class SemanticMapMemoryNode(Node):
         self.declare_parameter("cross_class_mutex_enabled", True)
         self.declare_parameter("cross_class_mutex_distance_m", 0.6)
         self.declare_parameter("mutex_min_observation_count", 3)
+        # Per-class merge radius overrides, "label:metres". The generic
+        # radii assume point-like objects; a physically LONG object needs
+        # a radius that spans it, or its observations (localized wherever
+        # each ray lands along the body) split into candidates that never
+        # individually reach the promotion threshold. Measured (R05 A1):
+        # the 4.07 m jersey barrier under a 0.6 m search merge radius —
+        # 70 s of search, plenty of boxes, zero promotions. An override
+        # beats the search radius too: it reflects the object's physical
+        # size, which does not shrink because a search is active.
+        self.declare_parameter("class_merge_overrides", [""])
         # Observability only: how often the per-gate counters are printed.
         # A block is printed only when a counter changed since the last one,
         # so an idle node stays quiet. 0 disables the periodic block (the
@@ -557,6 +587,11 @@ class SemanticMapMemoryNode(Node):
             self.get_parameter("search_min_range_m").value)
         self._observable = {str(v).lower() for v in
                             self.get_parameter("observable_classes").value}
+        self._class_merge: dict[str, float] = {}
+        for entry in self.get_parameter("class_merge_overrides").value:
+            name, _, metres = str(entry).rpartition(":")
+            if name and metres:
+                self._class_merge[name.strip().lower()] = float(metres)
 
         self._geom_enabled = self.get_parameter("geometry_check_enabled").value
         self._geom_radius = self.get_parameter("geometry_check_radius_cells").value
@@ -854,6 +889,8 @@ class SemanticMapMemoryNode(Node):
         for c in self._candidates:
             if c.semantic_class == label:
                 continue
+            if labels_same_family(c.semantic_class, label):
+                continue   # same object, finer name — not a label swap
             d = math.hypot(c.x - x, c.y - y)
             if d < self._mutex_dist and c.obs_count >= self._mutex_min_obs and c.obs_count > best_obs:
                 best_blocker = c
@@ -872,11 +909,12 @@ class SemanticMapMemoryNode(Node):
     def _find_landmark(self, label, x, y):
         best = None
         best_score = float("inf")
+        merge_d = self._class_merge.get(label, self._merge_d)
         for lm in self._landmarks.values():
             if lm.semantic_class != label:
                 continue
             d = math.hypot(lm.x - x, lm.y - y)
-            if d < self._merge_d:
+            if d < merge_d:
                 score = d / max(lm.observation_count, 1)
                 if score < best_score:
                     best = lm
@@ -904,6 +942,13 @@ class SemanticMapMemoryNode(Node):
         for lm in self._landmarks.values():
             if lm.semantic_class == label:
                 continue
+            # Same-family labels are not disagreement (see
+            # `labels_same_family`): a "person wearing a green shirt"
+            # observation on a `person` landmark must be free to grow
+            # its own candidate instead of becoming evidence against a
+            # label it agrees with.
+            if labels_same_family(lm.semantic_class, label):
+                continue
             d = math.hypot(lm.x - x, lm.y - y)
             if d < self._evidence_d and d < best_d:
                 best = lm
@@ -915,7 +960,12 @@ class SemanticMapMemoryNode(Node):
         best_d = float("inf")
         # Active-search candidates use the tighter merge radius: true
         # search targets cluster tightly, mislocalized boxes scatter (R04).
-        if self._search_label is not None and label == self._search_label:
+        # A per-class override beats both — it encodes the object's
+        # physical extent (a 4 m barrier's true observations legitimately
+        # scatter along its whole body, R05 A1).
+        if label in self._class_merge:
+            merge_d = self._class_merge[label]
+        elif self._search_label is not None and label == self._search_label:
             merge_d = self._search_cand_d
         else:
             merge_d = self._cand_d

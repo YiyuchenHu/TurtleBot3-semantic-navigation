@@ -122,6 +122,24 @@ la_detector_node:
     # vocabulary entry.
     cross_class_iou: 0.8
 
+    # ── Coverage containment veto (R05) ────────────────────
+    # The coverage veto above compares boxes by IoU, which only sees
+    # WHOLE-object disagreements. R05 A1 measured the other shape: at
+    # 2.4-2.9 m the model boxed only the green SHIRT of the centre
+    # person and called it "trash can" (green, right apparent size —
+    # the height gate cannot reject it). That box is fully inside the
+    # "person wearing a green shirt" coverage box, but their IoU is far
+    # below 0.8, so the veto never fired; the fake trash-can candidate
+    # promoted ON the person and its cross-class mutex then blocked the
+    # real person observations — the green-shirt search that followed
+    # ran 310 s and ended NOT FOUND with its own candidate stuck at 4/5.
+    # A publishable box with at least this fraction of its area inside a
+    # DISAGREEING coverage box is vetoed as a part-of-a-whole mislabel.
+    # Known cost: a genuinely separate object whose box falls entirely
+    # within a coverage box is vetoed too — in practice a nearer object
+    # extends below the farther one's box, so containment stays < 1.
+    coverage_containment: 0.8
+
     # ── Topics (absolute: the YOLO node's resolved names, so the
     #    downstream chain and RViz need zero changes) ─────────
     image_topic:        "/camera/image_raw"

@@ -60,6 +60,26 @@ def iou_xyxy(a: list[float], b: list[float]) -> float:
     return inter / max(area_a + area_b - inter, 1e-9)
 
 
+def containment(inner: list[float], outer: list[float]) -> float:
+    """Fraction of `inner`'s area that lies inside `outer`.
+
+    Asymmetric on purpose: it catches the PART-OF-A-WHOLE mislabel that
+    IoU misses. R05 A1: at 2.4-2.9 m the model boxed only the green
+    SHIRT of the centre person and labeled it "trash can" (green box,
+    right apparent size — no geometric filter can reject it on its own).
+    That box sits fully inside the "person wearing a green shirt"
+    coverage box, but their IoU is well under 0.8 because the shirt is a
+    fraction of the body, so the IoU veto never fired: the fake
+    trash-can candidate promoted on the person and its cross-class mutex
+    then blocked the real person observations.
+    """
+    ix1, iy1 = max(inner[0], outer[0]), max(inner[1], outer[1])
+    ix2, iy2 = min(inner[2], outer[2]), min(inner[3], outer[3])
+    iw, ih = max(0.0, ix2 - ix1), max(0.0, iy2 - iy1)
+    area_inner = (inner[2] - inner[0]) * (inner[3] - inner[1])
+    return (iw * ih) / max(area_inner, 1e-9)
+
+
 def filter_bearing_occluded(dets: list[dict],
                             min_bottom_gap_px: float = 8.0
                             ) -> tuple[list[dict], int]:
@@ -145,6 +165,10 @@ class LaDetectorNode(Node):
         self.declare_parameter("min_interval_sec", 0.3)
         self.declare_parameter("max_angular_vel", 0.5)
         self.declare_parameter("cross_class_iou", 0.8)
+        # Coverage veto also fires when a publishable box lies (mostly)
+        # INSIDE a disagreeing coverage box — the part-of-a-whole
+        # mislabel IoU cannot see (see `containment`).
+        self.declare_parameter("coverage_containment", 0.8)
         self.declare_parameter("occlusion_filter", True)
         self.declare_parameter("active_search_topic", "/active_search")
         # Coverage categories: requested from the model and used for the
@@ -187,6 +211,7 @@ class LaDetectorNode(Node):
         self._min_interval = float(g("min_interval_sec"))
         self._max_ang_vel = float(g("max_angular_vel"))
         self._cross_iou = float(g("cross_class_iou"))
+        self._cover_containment = float(g("coverage_containment"))
         self._occlusion_filter = bool(g("occlusion_filter"))
         self._pub_debug = bool(g("publish_debug_image"))
         self._debug_stale_after = float(g("debug_stale_after_sec"))
@@ -264,6 +289,20 @@ class LaDetectorNode(Node):
         constraint a). A term that equals a base word is not duplicated.
         """
         base = self._base_vocabulary
+        if self._search_term:
+            # A base word that is a token-subset of the search term is
+            # SUSPENDED for the duration of the search. Measured (R05
+            # green-shirt probe): with "person" in the vocabulary the
+            # model answers almost every frame with the generic label —
+            # 503 "person" observations against 18 for the injected
+            # "person wearing a green shirt", nowhere near a promotion.
+            # R04's search-first profile succeeded on 11 observations
+            # precisely because the generic word was absent and the
+            # model had to choose between the expression and the color
+            # coverage classes. Suspending (not deleting) keeps mapping
+            # for every other class running, and the word returns the
+            # moment the search clears.
+            base = [w for w in base if not labels_agree(w, self._search_term)]
         if self._search_term and self._search_term not in base:
             self._vocabulary = [self._search_term] + base
         else:
@@ -367,10 +406,12 @@ class LaDetectorNode(Node):
         if cover_dets:
             kept = []
             for d in dets:
-                clash = any(iou_xyxy(c["bbox_xyxy"], d["bbox_xyxy"])
-                            >= self._cross_iou
-                            and not labels_agree(c["label"], d["label"])
-                            for c in cover_dets)
+                clash = any(
+                    (iou_xyxy(c["bbox_xyxy"], d["bbox_xyxy"]) >= self._cross_iou
+                     or containment(d["bbox_xyxy"], c["bbox_xyxy"])
+                     >= self._cover_containment)
+                    and not labels_agree(c["label"], d["label"])
+                    for c in cover_dets)
                 if clash:
                     self._st["cover_vetoed"] += 1
                 else:

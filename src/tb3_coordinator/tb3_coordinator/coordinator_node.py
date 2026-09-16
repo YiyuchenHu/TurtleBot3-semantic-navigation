@@ -135,6 +135,29 @@ class CoordinatorNode(Node):
         # target from the current pose when the map was already fully
         # explored before the search began.
         self.declare_parameter("search_grace_sec", 15.0)
+        # ── Search patrol (R05) ──────────────────────────────────────
+        # Frontier exploration finishes when the MAP is complete, which
+        # is not the same as having LOOKED at everything: the frontier
+        # goals always face outward, so objects in the interior are only
+        # ever seen in passing. Measured (R05 A1/A2): once exploration
+        # completed (~400 s), every later search died at the grace
+        # window with the robot standing still — the green-shirt
+        # candidate sat at n=4/5, 0.05 m from the true person, and
+        # expired. Instead of giving up, patrol: drive to a point the
+        # search has not covered and turn on the spot there (the sweep
+        # speed is below the detector's spin gate, so frames still
+        # count). Each round = goal + sweep; NOT FOUND only after the
+        # budget is spent.
+        self.declare_parameter("search_patrol_enabled", True)
+        self.declare_parameter("search_patrol_rounds", 4)
+        self.declare_parameter("search_patrol_sweep_sec", 14.0)
+        self.declare_parameter("search_patrol_goal_timeout_sec", 60.0)
+        # Patrol waypoints in the map frame, "x:y". Default = the four
+        # interior quadrant centres of the 6x6 m room: close enough to
+        # every object that a sweep sees it inside the memory range gate
+        # (2.5 m), far enough from the walls to be reachable.
+        self.declare_parameter("search_patrol_points",
+                               ["1.2:1.2", "-1.2:1.2", "-1.2:-1.2", "1.2:-1.2"])
         # Watchdog for the preemption path: if the cancelled goal's
         # result callback never arrives, dispatch the queued command
         # anyway after this long.
@@ -156,6 +179,19 @@ class CoordinatorNode(Node):
         self._sweep_duration = self.get_parameter("sweep_duration_sec").value
         self._search_grace = self.get_parameter("search_grace_sec").value
         self._preempt_watchdog_sec = self.get_parameter("preempt_watchdog_sec").value
+        self._patrol_enabled = bool(
+            self.get_parameter("search_patrol_enabled").value)
+        self._patrol_rounds = int(
+            self.get_parameter("search_patrol_rounds").value)
+        self._patrol_sweep_sec = float(
+            self.get_parameter("search_patrol_sweep_sec").value)
+        self._patrol_goal_timeout = float(
+            self.get_parameter("search_patrol_goal_timeout_sec").value)
+        self._patrol_points = []
+        for entry in self.get_parameter("search_patrol_points").value:
+            sx, _, sy = str(entry).partition(":")
+            if sx and sy:
+                self._patrol_points.append((float(sx), float(sy)))
 
         # ── State ─────────────────────────────────────────────────────────
         self._mode = Mode.EXPLORING
@@ -172,6 +208,13 @@ class CoordinatorNode(Node):
         self._search_check_timer = None
         self._expl_complete = False     # latest latched /exploration_complete
         self._last_odom_xy = None
+        # Search patrol
+        self._patrol_active = False
+        self._patrol_round = 0
+        self._patrol_goal_handle = None
+        self._patrol_timer = None
+        self._patrol_sweep_t0 = None
+        self._patrol_goal_t0 = None
         # Preemption
         self._pending_cmd = None
         self._preempt_timer = None
@@ -361,6 +404,7 @@ class CoordinatorNode(Node):
         self._search_query = query_text or self._last_cmd
         self._search_t0 = self.get_clock().now()
         self._search_dist = 0.0
+        self._abort_patrol()   # fresh budget per search
         self._publish_active_search(label)
         self._set_mode(Mode.SEARCHING)
         self._set_exploration(True)
@@ -376,6 +420,7 @@ class CoordinatorNode(Node):
             5.0, self._search_check_tick)
 
     def _clear_search(self, reason: str) -> None:
+        self._abort_patrol()
         if self._search_label is None:
             return
         label = self._search_label
@@ -394,16 +439,122 @@ class CoordinatorNode(Node):
             % (label, reason, elapsed, self._search_dist))
 
     def _search_check_tick(self) -> None:
-        """Periodic SEARCHING watchdog: honors a latched exploration-
-        complete once the grace period has passed."""
+        """Periodic SEARCHING watchdog: once exploration is complete and
+        the grace period has passed, patrol (if enabled and budget left),
+        else declare NOT FOUND."""
         if self._mode != Mode.SEARCHING:
+            return
+        if self._patrol_active:
             return
         if not self._expl_complete:
             return
         elapsed = (self.get_clock().now() - self._search_t0).nanoseconds / 1e9
         if elapsed < self._search_grace:
             return
+        if self._patrol_enabled and self._patrol_points \
+                and self._patrol_round < self._patrol_rounds:
+            self._start_patrol_round()
+            return
         self._search_not_found()
+
+    # ── Search patrol ────────────────────────────────────────────────────
+
+    def _start_patrol_round(self) -> None:
+        """Drive to the next patrol waypoint; sweep on arrival."""
+        x, y = self._patrol_points[self._patrol_round % len(self._patrol_points)]
+        self._patrol_round += 1
+        self._patrol_active = True
+        # Exploration off during patrol: its goals would fight ours, and
+        # it has nothing left to offer anyway (that is why we are here).
+        self._set_exploration(False)
+        self.get_logger().info(
+            "[patrol] round %d/%d for '%s' → waypoint (%.2f, %.2f)"
+            % (self._patrol_round, self._patrol_rounds, self._search_label,
+               x, y))
+        self._publish_status(
+            "search patrol %d/%d → (%.2f, %.2f)"
+            % (self._patrol_round, self._patrol_rounds, x, y))
+        if not self._nav_client.server_is_ready():
+            self.get_logger().warn("[patrol] Nav2 not ready — sweeping here")
+            self._begin_patrol_sweep()
+            return
+        pose = PoseStamped()
+        pose.header.frame_id = "map"
+        pose.header.stamp = self.get_clock().now().to_msg()
+        pose.pose.position.x = x
+        pose.pose.position.y = y
+        pose.pose.orientation.w = 1.0
+        goal = NavigateToPose.Goal()
+        goal.pose = pose
+        self._patrol_goal_t0 = self.get_clock().now()
+        future = self._nav_client.send_goal_async(goal)
+        future.add_done_callback(self._patrol_goal_response_cb)
+
+    def _patrol_goal_response_cb(self, future) -> None:
+        handle = future.result()
+        if not handle.accepted:
+            self.get_logger().warn("[patrol] waypoint goal rejected — sweeping here")
+            self._begin_patrol_sweep()
+            return
+        self._patrol_goal_handle = handle
+        handle.get_result_async().add_done_callback(self._patrol_goal_result_cb)
+
+    def _patrol_goal_result_cb(self, _future) -> None:
+        self._patrol_goal_handle = None
+        # Arrived, aborted or cancelled — either way, look around from
+        # wherever the robot ended up. A search that was already
+        # answered mid-drive has left SEARCHING; do not sweep then.
+        if self._mode == Mode.SEARCHING and self._patrol_active:
+            self._begin_patrol_sweep()
+
+    def _begin_patrol_sweep(self) -> None:
+        self._patrol_sweep_t0 = self.get_clock().now()
+        if self._patrol_timer is not None:
+            self._patrol_timer.cancel()
+        self._patrol_timer = self.create_timer(0.1, self._patrol_sweep_tick)
+        self.get_logger().info(
+            "[patrol] sweeping %.0fs at the waypoint" % self._patrol_sweep_sec)
+
+    def _patrol_sweep_tick(self) -> None:
+        if self._mode != Mode.SEARCHING:
+            self._end_patrol_round()
+            return
+        elapsed = (self.get_clock().now()
+                   - self._patrol_sweep_t0).nanoseconds / 1e9
+        if elapsed >= self._patrol_sweep_sec:
+            self._end_patrol_round()
+            return
+        cmd = Twist()
+        cmd.angular.z = self._sweep_ang_vel
+        self._cmd_vel_pub.publish(cmd)
+
+    def _end_patrol_round(self) -> None:
+        if self._patrol_timer is not None:
+            self._patrol_timer.cancel()
+            self._patrol_timer = None
+        self._cmd_vel_pub.publish(Twist())
+        self._patrol_active = False
+        if self._mode != Mode.SEARCHING:
+            return
+        if self._patrol_round >= self._patrol_rounds:
+            self.get_logger().info(
+                "[patrol] budget spent (%d rounds) — declaring NOT FOUND"
+                % self._patrol_round)
+            self._search_not_found()
+        # else: the next _search_check_tick starts the following round.
+
+    def _abort_patrol(self) -> None:
+        """Stop any patrol in flight (search ended, or a new command)."""
+        if self._patrol_timer is not None:
+            self._patrol_timer.cancel()
+            self._patrol_timer = None
+        if self._patrol_goal_handle is not None:
+            self._patrol_goal_handle.cancel_goal_async()
+            self._patrol_goal_handle = None
+        if self._patrol_active:
+            self._cmd_vel_pub.publish(Twist())
+        self._patrol_active = False
+        self._patrol_round = 0
 
     def _search_not_found(self) -> None:
         label = self._search_label

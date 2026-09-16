@@ -34,6 +34,26 @@ coordinator_node:
     # this long before declaring NOT FOUND (lets the detector see the
     # target from the current pose).
     search_grace_sec:           15.0
+    # ── Search patrol (R05) ────────────────────────────────────
+    # "Exploration complete" means the MAP is complete, not that the
+    # robot has LOOKED at everything: frontier goals face outward, so
+    # interior objects are only ever seen in passing. Measured (R05
+    # A1/A2): after exploration finished (~400 s) every later search
+    # died at the grace window standing still — the green-shirt
+    # candidate sat at n=4/5, 0.05 m from the true person, and expired;
+    # 'go to the bookshelf' gave up after 15 s. Patrol instead: drive to
+    # a waypoint and turn on the spot there (sweep_angular_vel 0.4 is
+    # below the detector's 0.5 spin gate, so the frames still count),
+    # one round per waypoint, NOT FOUND only after the budget is spent.
+    # Disable with search_patrol_enabled:=false to get the R04 behavior.
+    search_patrol_enabled:      true
+    search_patrol_rounds:       4
+    search_patrol_sweep_sec:    14.0
+    search_patrol_goal_timeout_sec: 60.0
+    # Interior quadrant centres of the 6x6 m room: close enough to every
+    # object for a sweep to see it inside the 2.5 m memory range gate,
+    # far enough from the walls to stay reachable.
+    search_patrol_points:       ["1.2:1.2", "-1.2:1.2", "-1.2:-1.2", "1.2:-1.2"]
     # Preemption safety net: dispatch the queued command even if the
     # cancelled goal's terminal result never arrives.
     preempt_watchdog_sec:       5.0
@@ -161,7 +181,19 @@ semantic_map_memory_node:
     # its count is frozen, so challenger counts are one-sided
     # evidence. Measured R02c run A: bookshelf_0 flipped to person 61 s
     # after its search cleared.
-    observable_classes:        ["person"]
+    # R05: the default detector profile maps all five registry classes,
+    # so all five are permanently observable (their counts keep moving
+    # and relabel evidence against them is two-sided again).
+    observable_classes:        ["person", "bookshelf", "trash can",
+                                "traffic cone", "concrete barrier"]
+    # Per-class merge radius, "label:metres" — overrides candidate AND
+    # landmark merge for that class, including during its search. The
+    # jersey barrier is 4.07 m long and its true observations scatter
+    # along the body wherever each ray lands; under the 0.6 m search
+    # radius they split into candidates that never reach n=5 (R05 A1:
+    # 70 s barrier search, zero promotions → NOT FOUND). 2.2 m spans
+    # half the barrier plus slop.
+    class_merge_overrides:     ["concrete barrier:2.2"]
     wall_boundary_margin_m:   0.20
 
     # ── Landmark relabelling ───────────────────────────────
