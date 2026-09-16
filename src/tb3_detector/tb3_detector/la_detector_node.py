@@ -709,8 +709,11 @@ class LaDetectorNode(Node):
                 cv2.rectangle(vis, (x1, y1), (x2, y2), det_color, 2)
                 cv2.putText(vis, d["label"], (x1, max(y1 - 6, 12)),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.55, det_color, 2)
-            cv2.putText(vis, "LA /detect %.0f ms | boxes %.1fs ago%s | yaw comp %+d px"
-                        % (ov["rtt_ms"], age, " (STALE)" if stale else "", du),
+            # Age of the boxes' SOURCE IMAGE (result age + round trip):
+            # that is the interval the yaw shift covers.
+            cv2.putText(vis, "LA /detect %.0f ms | boxes from %.1fs ago%s | yaw comp %+d px"
+                        % (ov["rtt_ms"], age + ov["rtt_ms"] / 1000.0,
+                           " (STALE)" if stale else "", du),
                         (8, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
                         (0, 255, 255), 1)
         try:
