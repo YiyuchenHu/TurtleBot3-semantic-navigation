@@ -100,7 +100,10 @@ ros2 launch tb3_coordinator full_semantic_nav_la.launch.py \
 ```
 
 R07 最终配置 = 这条命令的默认值：Nav2 用 Humble 原版 `nav2_bringup/params/nav2_params.yaml`
-（R05 配置），起步旋转扫描 0.4 rad/s，memory 层按观测 stamp 查 TF（§7.4）。
+（R05 配置），起步旋转扫描 0.4 rad/s，memory 层按观测 stamp 查 TF（`tf_stamped_lookup: true`、
+`tf_stamp_timeout: 0.0`）、semantic_memory `position_smoothing_alpha: 1.0`、map memory 晋升防护
+`min_distinct_observations: 3`（§7.4）。起栈后可用 `ros2 param get` 核对这四项；
+`SemanticMapMemoryNode ready ... min_obs=8 min_distinct=3` 一行也能看到。
 可选慢转版（R06a 步骤 7 的 0.3 rad/s 全套限速，R07 未采用为默认）：
 
 ```bash
@@ -121,6 +124,13 @@ ros2 launch tb3_coordinator full_semantic_nav_la.launch.py \
 另外两条健康判据（R06a/R07）：localizer 的 `[scan_match] stamp-matched N, fallback-to-latest 0`
 和 semantic_map_memory_node 的 gate summary 里 `[tf_match] stamped N, fallback-to-latest 0`——
 两个 fallback 计数都应为 0 或接近 0（非 0 = 时序退化，见 §7.4）。
+
+**冒烟 / take 判卷一律跑** `python3 reports/R07_probe/judge_log.py reports/demo/stack.log`：
+打印 wedge 计数（R1）、两个 fallback（R2）、每个 landmark 事件（new_landmark / relabel / held）
+落在哪个真物上或 GHOST、结束 landmark 是否全在真物上（R3）、命令四类任何时刻有无鬼影（R4，
+其它类被 relabel 自愈的列为 self-healed 不算失败）。历史校准（"No valid trajectories" 行数 /
+Goal stalled 次数）：R05 B1 0/3、R05 A2 8/7、R07 冒烟 1 0/5、R07 冒烟 2 **38/11（一次 70 s 卡在
+中心人物旁，判 wedge 未录）**、R06a 0.3 rad/s 868/6。
 
 ## 5. 录屏准备（发第一条命令前做完）
 
@@ -278,6 +288,20 @@ world 里的三个彩衣 person（绿=中心、蓝=NE、红=SE）由
   都用机器人**当前**位姿投影 → 转弯时同一个观测扫出一段弧（bag_turn 回放：垃圾桶 15 次重发
   散布 9.2 m → 1.1 m；全部 170 条 memory 检测落在物体上 13% → 49%，范围闸内 29% → 69%）。
   日志 `[tf_match]`（gate summary 内）。`tf_stamped_lookup: false` 回 R06a 行为。
+  `tf_stamp_timeout` 在这个单线程节点里是阻塞上限而非有效等待（等待期间 /tf 进不来），
+  最终配置 0.0（R07 冒烟 0.1 时 fallback 0，等待从未起作用）。
+* **memory EMA 关掉**（`semantic_memory.yaml` `position_smoothing_alpha: 1.0`，R07）：EMA 在
+  base_link 里混不同位姿的观测；bag_turn 回放范围闸内落在真物上 69%（α 0.3）→ 100% / 0.19 m
+  （α 1.0，与 localizer 原始输出持平）。
+* **晋升防护**（`coordinator.yaml` `min_distinct_observations: 3`，R07 最终）：semantic_memory 以
+  1 Hz 重发每个活对象、观测后还活 5 s，TF 修后重发堆到同一点，一次真实检测在 map memory 里算
+  3–6 次（垃圾桶 5 次检测 → n=27）。R07 冒烟 1 的鬼影就是 2 帧错标 × 4 次重发 = n=8。现在候选
+  除 n≥门槛外还要 ≥3 个不同 (memory 对象 id, 观测 stamp)，搜索表达式同样 3（=3 帧而非 3 次重发）。
+  日志：`[held] <class> candidate n=8/8 but k=2/3 distinct ...`（每候选一次）、gate summary 行
+  `held_distinct`、候选行 `n=8/8 k=2/3`、`[new_landmark] ... after 8 obs (4 distinct)`。
+  **代价（R07 冒烟 2 实测）**：驶过式观测常常只有 2 帧在 2.5 m 闸内，锥桶候选 n=10 k=2 过期 3 次，
+  +395 s 才晋升（无防护的冒烟 1 是 +88 s）；书架 +320 s（冒烟 1 +148 s，路径不同不可直接比）。
+  搜索类靠巡逻点原地扫（0.5–2 Hz 出框）攒 k，R05 B2 实测 2 s 内 4 帧。
 * **解码**（R06a 步骤 3）：greedy（argmax，保留 T/top_p 锐化——直接 T=0 会把 MTP 解码打进
   6 s/帧的重复循环）+ fast 模式 + token 上限 16+24×类别数 + 撞帽自动采样重试；分辨率保持
   640（512 以下 barrier 检出减半）；两阶段 coverage 实现了但默认关。grounding 容器
