@@ -168,13 +168,15 @@ class LaDetectorNode(Node):
         # localizer drops anyway); hybrid == fast on the median, but
         # hybrid's AR fallback churns on busy frames (39-48 steps, one
         # 132-step / 2.0 s outlier in the replay) where fast stays at
-        # 28-29 steps. The token cap only bounds runaway generations (a
-        # degenerate decode ran 6 s/frame): 32 + 40/category is ~3x a
-        # real answer.
+        # 28-29 steps. The token cap bounds runaway generations: greedy
+        # locks into a repeat loop on rare frames (3 of ~400 replay
+        # requests; uncapped that was 6 s/frame) — 16 + 24/category is
+        # ~1.5x the longest real answer seen (7 boxes, 9 categories),
+        # and the server retries a capped greedy call once with sampling.
         self.declare_parameter("gen_mode", "fast")
         self.declare_parameter("gen_greedy", True)
-        self.declare_parameter("gen_tokens_base", 32)
-        self.declare_parameter("gen_tokens_per_category", 40)
+        self.declare_parameter("gen_tokens_base", 16)
+        self.declare_parameter("gen_tokens_per_category", 24)
         # Input downscale (longer side, px; 0 = native 640). Measured:
         # 448 px saves ~45 ms but halves concrete-barrier recall and drops
         # the far shirt-colour boxes — kept at native (R06a step 3b).
@@ -240,6 +242,10 @@ class LaDetectorNode(Node):
         # R05: the debug image is republished at CAMERA rate with the most
         # recent /detect overlay; boxes older than this turn grey.
         self.declare_parameter("debug_stale_after_sec", 1.5)
+        # R06a step 5: shift the stale overlay boxes horizontally by the
+        # yaw change since their image (odom), so during a turn the boxes
+        # stay on the objects for the ~0.4 s the next /detect takes.
+        self.declare_parameter("debug_motion_comp", True)
         self.declare_parameter("jpeg_quality", 85)
         self.declare_parameter("queue_size", 5)
         self.declare_parameter("stats_interval_sec", 10.0)
@@ -283,6 +289,7 @@ class LaDetectorNode(Node):
         self._occlusion_filter = bool(g("occlusion_filter"))
         self._pub_debug = bool(g("publish_debug_image"))
         self._debug_stale_after = float(g("debug_stale_after_sec"))
+        self._debug_motion_comp = bool(g("debug_motion_comp"))
         self._jpeg_quality = int(g("jpeg_quality"))
         queue = int(g("queue_size"))
         self._stats_interval = float(g("stats_interval_sec"))
@@ -496,17 +503,18 @@ class LaDetectorNode(Node):
         self._last_request_pose = self._pose
         self._inflight.set()
         threading.Thread(target=self._detect_worker,
-                         args=(bgr.copy(), msg.header), daemon=True).start()
+                         args=(bgr.copy(), msg.header, self._pose),
+                         daemon=True).start()
 
-    def _detect_worker(self, bgr, header) -> None:
+    def _detect_worker(self, bgr, header, pose) -> None:
         try:
-            self._run_detect(bgr, header)
+            self._run_detect(bgr, header, pose)
         except Exception as e:
             self.get_logger().error("detect worker failed: %s" % e)
         finally:
             self._inflight.clear()
 
-    def _run_detect(self, bgr, header) -> None:
+    def _run_detect(self, bgr, header, pose=None) -> None:
         t0 = time.monotonic()
         categories = self._vocabulary + self._coverage
         deferred: list[str] = []
@@ -573,7 +581,8 @@ class LaDetectorNode(Node):
         # Atomic swap read by the image callback; wall time (monotonic)
         # drives the staleness grey-out.
         self._overlay = dict(dets=dets, cover_dets=cover_dets,
-                             rtt_ms=rtt_ms, wall_t=time.monotonic())
+                             rtt_ms=rtt_ms, wall_t=time.monotonic(),
+                             yaw=pose[2] if pose else None)
         self._maybe_log_stats()
 
     # ── HTTP ────────────────────────────────────────────────────────────
@@ -673,21 +682,35 @@ class LaDetectorNode(Node):
             age = time.monotonic() - ov["wall_t"]
             stale = age > self._debug_stale_after
             det_color = (160, 160, 160) if stale else (255, 120, 0)
+            # Yaw compensation: the localizer's linear pixel<->bearing
+            # model is u = W/2 - bearing * (W/2)/(hfov/2); a CCW yaw
+            # change dpsi lowers every bearing by dpsi, so boxes move
+            # RIGHT by dpsi * (W/2)/(hfov/2) px (589 px/rad at 640/62.2°).
+            du = 0
+            if (self._debug_motion_comp and ov.get("yaw") is not None
+                    and self._pose is not None):
+                dpsi = (self._pose[2] - ov["yaw"] + math.pi) % (2.0 * math.pi) - math.pi
+                du = int(round(dpsi * (vis.shape[1] / 2.0) / self._half_hfov))
+
+            def shifted(box):
+                x1, y1, x2, y2 = [int(v) for v in box]
+                return x1 + du, y1, x2 + du, y2
+
             for d in ov["cover_dets"]:
                 # Coverage boxes (never published): thin grey, for
                 # eyeballing what the veto/occlusion machinery can see.
-                x1, y1, x2, y2 = [int(v) for v in d["bbox_xyxy"]]
+                x1, y1, x2, y2 = shifted(d["bbox_xyxy"])
                 cv2.rectangle(vis, (x1, y1), (x2, y2), (140, 140, 140), 1)
                 cv2.putText(vis, "[%s]" % d["label"],
                             (x1, min(y2 + 14, vis.shape[0] - 4)),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.45, (140, 140, 140), 1)
             for d in ov["dets"]:
-                x1, y1, x2, y2 = [int(v) for v in d["bbox_xyxy"]]
+                x1, y1, x2, y2 = shifted(d["bbox_xyxy"])
                 cv2.rectangle(vis, (x1, y1), (x2, y2), det_color, 2)
                 cv2.putText(vis, d["label"], (x1, max(y1 - 6, 12)),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.55, det_color, 2)
-            cv2.putText(vis, "LA /detect %.0f ms | boxes %.1fs ago%s"
-                        % (ov["rtt_ms"], age, " (STALE)" if stale else ""),
+            cv2.putText(vis, "LA /detect %.0f ms | boxes %.1fs ago%s | yaw comp %+d px"
+                        % (ov["rtt_ms"], age, " (STALE)" if stale else "", du),
                         (8, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
                         (0, 255, 255), 1)
         try:

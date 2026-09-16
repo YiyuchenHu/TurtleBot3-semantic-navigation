@@ -107,15 +107,17 @@ la_detector_node:
     #     hybrid's AR fallback churns on busy multi-person frames
     #     (39-48 decode steps, one 132-step / 2.0 s outlier in the bag
     #     replay) where fast stays at 28-29 steps → fast.
-    #   * token cap 32 + 40/category (~3x a real answer) only bounds
-    #     runaway generations: a degenerate decode measured 6 s/frame.
+    #   * token cap 16 + 24/category (~1.5x the longest real answer)
+    #     bounds runaway generations: greedy locks into a repeat loop on
+    #     rare frames (3 of ~400 replay requests; 6 s/frame uncapped),
+    #     and the server retries a capped greedy call once with sampling.
     #   * gen_max_side 448 would save ~45 ms/frame but halves the
     #     concrete-barrier recall (8 -> 4 of 60 frames) and drops far
     #     shirt-colour boxes — stays at native 640.
     gen_mode: "fast"
     gen_greedy: true
-    gen_tokens_base: 32
-    gen_tokens_per_category: 40
+    gen_tokens_base: 16
+    gen_tokens_per_category: 24
     gen_max_side: 0
     # Two-phase coverage (expressions only requested when the primary
     # request hit a person): measured no latency win (persons are in
@@ -199,6 +201,11 @@ la_detector_node:
 
     # ── Debug ──────────────────────────────────────────────
     publish_debug_image: true
+    # Shift the overlay boxes by the odom yaw change since their image
+    # (R06a step 5): during a 0.4 rad/s turn the boxes lag ~10° (~100 px)
+    # for the ~0.4 s a /detect takes; with compensation they stay on
+    # the objects. Set false for the raw overlay.
+    debug_motion_comp: true
     jpeg_quality: 85
     queue_size: 5
     # One [la_stats] summary line per this many seconds (0 disables).
