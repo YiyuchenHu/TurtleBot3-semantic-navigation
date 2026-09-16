@@ -1,6 +1,6 @@
 # LocateAnything 模式运行手册（la_runbook）
 
-手动开终端跑通 LocateAnything 语义导航栈并录屏的操作手册。每个终端一节，命令逐条可直接粘贴。数据（预期耗时、预期日志行）全部来自 R02b/R02c 验收实测。
+手动开终端跑通 LocateAnything 语义导航栈并录屏的操作手册。每个终端一节，命令逐条可直接粘贴，**只用 docker / source / ros2 / ffmpeg 原语**（R07 起；仓库脚本降级为 §12 可选封装）。数据（预期耗时、预期日志行）全部来自 R02b/R02c 验收实测。
 
 宿主机前提：NVIDIA 驱动 + NVIDIA Container Toolkit + X11 桌面；仓库位于
 `~/Desktop/Github_Project/TurtleBot3-semantic-navigation`（下文简写 `$REPO`）。
@@ -9,7 +9,7 @@
 
 ## 1. 总览与架构
 
-一次完整演示 = 3 个终端（A 容器 / B ROS 栈 / C 发命令）+ 可选录屏终端 D。
+一次完整演示 = 4 个终端：A 容器（docker）/ B ROS 栈（source + ros2 launch）/ C 观察（ros2 node/topic/param）/ D 发命令（ros2 topic pub）。全部是 docker 与 ros2 原语，不依赖本仓库的脚本；脚本只在 §12 作为可选封装列出。
 
 ```mermaid
 flowchart LR
@@ -56,143 +56,142 @@ docker compose -f docker/compose.yaml -f docker/compose.local.yaml exec sim \
 重命名/删除过 config 文件时 colcon 会因旧 build 目录里的残留引用失败（R07 改名
 nav2_params_la.yaml 时踩到），先 `rm -rf build/<pkg> install/<pkg>` 再 build.sh。
 
-## 3. 终端 A — 起容器，等 /health
+## 3. 终端 A — 起容器（docker）
+
+只用 docker / docker compose 原语。两个容器：`docker-sim-1`（ROS 2 Humble + Gazebo + Nav2）、
+`docker-grounding-1`（LocateAnything-3B HTTP 服务，与 sim 共享网络命名空间）。
 
 ```bash
 cd ~/Desktop/Github_Project/TurtleBot3-semantic-navigation
-xhost +local:docker
+xhost +local:docker                                   # 容器里的 Gazebo/RViz 要画到你的 X 屏幕
 docker compose -f docker/compose.yaml -f docker/compose.local.yaml up -d
+docker compose -f docker/compose.yaml -f docker/compose.local.yaml ps       # 两个都 Up
+docker exec docker-sim-1 nvidia-smi -L                # 必须列出 "GPU 0"
+docker logs -f docker-grounding-1                     # 看权重加载；冷启动 ~76 s，热启动 ~10 s；Ctrl+C 退出跟随
+curl http://127.0.0.1:8801/health                     # {"status":"ok", ..., "device":"cuda", ...}
 ```
 
-等 grounding 就绪（**冷启动约 76 s**——容器 recreate 或权重页缓存冷时；热启动约 10 s）：
+`nvidia-smi` 报 `Failed to initialize NVML: Unknown Error` = 容器丢了 GPU（§10.8）。修：
 
 ```bash
-until curl -sf http://127.0.0.1:8801/health; do echo waiting...; sleep 5; done; echo
+docker compose -f docker/compose.yaml -f docker/compose.local.yaml restart sim
+docker compose -f docker/compose.yaml -f docker/compose.local.yaml restart grounding   # 必须跟着重启（共享 netns）
 ```
 
-先在 sim 容器里 `docker exec docker-sim-1 nvidia-smi -L`：报 `NVML: Unknown Error`
-就是丢了 GPU（§10 坑 8），按那条先 restart sim 再 restart grounding。
-
-预期输出（`device` 必须是 `cuda`）：
-
-```
-{"status": "ok", "backend": "locate_anything", "device": "cuda", "model": "nvidia/LocateAnything-3B", "dtype": "bfloat16"}
-```
-
-## 4. 终端 B — 起 ROS 栈
-
-日志固定写到 `reports/demo/stack.log`（宿主可见，终端 C 的 send_command.sh 靠它验证收条）。
-**每次重启栈会覆盖该文件**；想留档先 `mv reports/demo/stack.log reports/demo/stack_runN.log`。
+改过 `src/` 后重建（colcon 在容器里）：
 
 ```bash
-cd ~/Desktop/Github_Project/TurtleBot3-semantic-navigation
-mkdir -p reports/demo
-docker compose -f docker/compose.yaml -f docker/compose.local.yaml exec sim bash
+docker exec -it docker-sim-1 bash -c "cd ~/ws && source /opt/ros/humble/setup.bash && colcon build --symlink-install"
 ```
 
-进入容器后（起点坐标按 §9 规则选，`AUTO` = 预设 **(1, -1)**，R07 起；R05 加 barrier 后
-旧预设 (-1.5, 0) 离它只有 1.05 m，已不合规）：
+重命名/删除过 config 文件时先 `rm -rf build/<pkg> install/<pkg>` 再 build（旧 build 目录残留引用）。
+
+## 4. 终端 B — 起 ROS 栈（source + ros2 launch）
 
 ```bash
-source /opt/ros/humble/setup.bash && source ~/ws/install/setup.bash
-ros2 launch tb3_coordinator full_semantic_nav_la.launch.py \
-  x_pose:=1.0 y_pose:=-1.0 2>&1 | tee ~/ws/reports/demo/stack.log
+docker exec -it docker-sim-1 bash                     # 进容器；以下都在容器内
+source /opt/ros/humble/setup.bash                     # ROS 2 底座
+source ~/ws/install/setup.bash                        # 本工作空间 overlay（每个新 shell 都要 source 这两行）
+ros2 launch tb3_coordinator full_semantic_nav_la.launch.py x_pose:=1.0 y_pose:=-1.0
 ```
 
-R07 最终配置 = 这条命令的默认值：Nav2 用 Humble 原版 `nav2_bringup/params/nav2_params.yaml`
-（R05 配置），起步旋转扫描 0.4 rad/s，memory 层按观测 stamp 查 TF（`tf_stamped_lookup: true`、
+起点 (1, −1) 是 R07 起的默认预设（§9 规则：离任何障碍 ≥1.2 m）。
+R07 最终配置 = 这条命令的默认值：Nav2 用 Humble 原版 `nav2_bringup/params/nav2_params.yaml`，
+起步旋转扫描 0.4 rad/s，memory 层按观测 stamp 查 TF（`tf_stamped_lookup: true`、
 `tf_stamp_timeout: 0.0`）、semantic_memory `position_smoothing_alpha: 1.0`、map memory 晋升防护
-`min_distinct_observations: 3`（§7.4）。起栈后可用 `ros2 param get` 核对这四项；
-`SemanticMapMemoryNode ready ... min_obs=8 min_distinct=3` 一行也能看到。
-可选慢转版（R06a 步骤 7 的 0.3 rad/s 全套限速，R07 未采用为默认）：
+`min_distinct_observations: 3`（§7.4）。可选慢转版：加
+`nav2_params:=/home/ubuntu/ws/install/tb3_coordinator/share/tb3_coordinator/config/nav2_params_la_slow.yaml warmup_angular_speed:=0.3`。
+
+日志不用 `tee`：ROS 2 的 launch 已经把所有节点输出写到
+`~/.ros/log/<时间戳目录>/launch.log`（`ls -t ~/.ros/log | head -1` 找最新）。要留档就 `cp` 那个文件到
+`~/ws/reports/demo/stack_<名字>.log`（宿主机路径 `reports/demo/`，bind mount）。
+想同时在屏幕上看又留档再用 `... 2>&1 | tee ~/ws/reports/demo/stack.log`（可选）。
+
+启动就绪判据（~25–40 s）：
+```
+[la_detector_node]: la_detector_node ready. server=http://127.0.0.1:8801 vocabulary=[...]
+[bt_navigator]: Begin navigating ...        ← Nav2 活了、探索开始（或 [action] Goal accepted）
+[la_detector_node]: [la_stats] ... errors=0 ...   ← 每 10 s 一条，errors=0 = grounding 链路健康
+```
+另两条健康判据：localizer `[scan_match] ... fallback-to-latest 0`、map memory `[tf_match] ... fallback-to-latest 0`。
+
+## 5. 终端 C — 观察（ros2 自省命令）
+
+这是最通用的一组命令，任何 ROS 2 系统都一样用。另开一个 shell 进同一容器：
 
 ```bash
-ros2 launch tb3_coordinator full_semantic_nav_la.launch.py \
-  nav2_params:=/home/ubuntu/ws/install/tb3_coordinator/share/tb3_coordinator/config/nav2_params_la_slow.yaml \
-  warmup_angular_speed:=0.3 2>&1 | tee ~/ws/reports/demo/stack.log
+docker exec -it docker-sim-1 bash
+source /opt/ros/humble/setup.bash && source ~/ws/install/setup.bash
+ros2 node list                                        # 栈起齐了没：la_detector_node / localizer_node / semantic_memory_node /
+                                                      #   semantic_map_memory_node / coordinator_node / bt_navigator / controller_server ...
+ros2 topic list                                       # 所有 topic；关心的：/user_command /coordinator_node/status
+                                                      #   /semantic_map_memory_node/landmark_objects /detector_node/detections
+ros2 action list                                      # 出现 /navigate_to_pose 才说明 Nav2 action server 活了（§10.9 竞态）
+ros2 param get /semantic_map_memory_node min_distinct_observations   # 核对最终配置（3）
+ros2 param get /semantic_memory_node position_smoothing_alpha        # 1.0
+ros2 topic echo /coordinator_node/status              # 状态机：EXPLORING → SEMANTIC_QUERYING → SEARCHING/SEMANTIC_NAV → TARGET_REACHED → IDLE
+ros2 topic echo /semantic_map_memory_node/landmark_objects --once    # memory 里现在有哪些 landmark（class_id、位置）
+ros2 topic hz /detector_node/detections               # 检测有没有在出（~0.7–0.9 Hz）
+ros2 topic echo /active_search                        # 搜索中注入的表达式（空 = 没在搜）
 ```
 
-启动就绪判据（launch 后 ~25–40 s 内依次出现）：
-
-```
-[la_detector_node]: la_detector_node ready. server=http://127.0.0.1:8801 vocabulary=['person', 'bookshelf', 'trash can', 'traffic cone', 'concrete barrier'] ...
-[bt_navigator]: Begin navigating ...      ← 或探索开始、机器人在 Gazebo 里动起来
-[la_detector_node]: [la_stats] frames=... requests=... errors=0 ...
+留证据（可选）：
+```bash
+ros2 bag record -o ~/ws/reports/R07_probe/bag_takeN /odom /cmd_vel /user_command \
+    /coordinator_node/status /semantic_map_memory_node/landmark_objects
 ```
 
-`[la_stats]` 行每 10 s 一条，`errors=0` 是 grounding 链路健康的持续证据。
-另外两条健康判据（R06a/R07）：localizer 的 `[scan_match] stamp-matched N, fallback-to-latest 0`
-和 semantic_map_memory_node 的 gate summary 里 `[tf_match] stamped N, fallback-to-latest 0`——
-两个 fallback 计数都应为 0 或接近 0（非 0 = 时序退化，见 §7.4）。
+### 5.1 录屏（宿主机；ffmpeg 原语，窗口手动摆）
 
-**冒烟 / take 判卷一律跑** `python3 reports/R07_probe/judge_log.py reports/demo/stack.log`：
-打印 wedge 计数（R1）、两个 fallback（R2）、每个 landmark 事件（new_landmark / relabel / held）
-落在哪个真物上或 GHOST、结束 landmark 是否全在真物上（R3）、命令四类任何时刻有无鬼影（R4，
-其它类被 relabel 自愈的列为 self-healed 不算失败）。历史校准（"No valid trajectories" 行数 /
-Goal stalled 次数）：R05 B1 0/3、R05 A2 8/7、R07 冒烟 1 0/5、R07 冒烟 2 38/11（70 s 卡在中心人物旁，
-fallback 自愈）、R07 take1/2/3 142/·、16/·、32/·、R06a 0.3 rad/s 868/6。
-**R07 定稿判据**：冒烟 R1 = 无 wedge，或 wedge 全部由 fallback 自愈且探索完成（`--mode smoke`）；
-take R1 = 任何 wedge / Nav2 超时即作废（`--mode take`，还打印每条命令 memory 直达/搜索、终态、
-位置误差、耗时，末行 `TAKE PASS/FAIL`）。R07 实测 (1,−1) 起点 5 次起栈 4 次有 wedge（frontier goal
-选在离人/锥桶 0.4–0.8 m 处），严格 take 规则在 frontier 选点净空修好之前基本过不了（§10.11）。
-
-## 5. 录屏准备（发第一条命令前做完）
-
-x11grab 抓的是**区域内最顶层的像素**——目标窗口没铺满录制区域、或被别的窗口/弹窗
-盖住，就会把你的桌面录进去（R02c 删过全部 RViz 素材；R04 又因 Gazebo 没铺满左半屏
-报废过一条，成片前必须逐段抽帧扫描）。录屏期间不要在同一屏幕上干别的，**先关掉
-通知弹窗**（微信等常驻通知会飘在最上层）。
-
-### 5.1 RViz 录屏布局（R04 起，R05 改紧凑版）
-
-launch 默认加载 `src/tb3_coordinator/rviz/la_demo.rviz`：只有地图视图
-（SLAM 地图 + landmark MarkerArray + 机器人 + Nav2 路径）和一块**浮动的**
-la_detector debug image 大面板，Displays/Views/Tool Properties/Time 全部隐藏。
-要全套调试面板时传 `rviz_config:=<绝对路径>/semantic_nav.rviz`。
-
-**R07 又中招一次**：take 2 录到 298–343 s 时一个私人笔记窗口盖住了 Gazebo/RViz 列——正好是
-书架、barrier 两条 memory 直达命令；take 3 录到 GNOME 概览与 Files 窗。录屏期间这块屏幕
-**什么都不能碰**（切工作区、Super 键、通知都会入镜）。`record_demo.sh check` 现在除 15 s 抽帧外
-还自动做逐秒亮度扫描（Gazebo 列 YAVG 偏离中位 >12 的秒段 = 疑似入侵），15 s 网格漏过的 3 s 段
-它能抓到；用 `ffmpeg select='not(between(t,a,b)+...)'` 切掉后再扫一遍到 "none"。
-
-### 5.2 摆窗与录制（R05 管线：scripts/record_demo.sh）
-
-**R04 管线（整屏抓取 + libx264）产出的是 ~4 fps 的幻灯片**——R05 逐帧 YDIF 实测
-raw_R04_G3 有效帧率 3.9 fps。凶手不是编码器而是 gzclient 本身：它的重绘率与窗口
-面积成反比（~45 MP/s 吞吐上限），3072×3406 的大窗只能画 4-5 fps；同管线抓 400×400
-的 glxgears 能到 55/60 fps。修法 = 三窗口缩小平铺一块**原生 1920×1080 区域**
-（零缩放）+ GPU 编码（h264_nvenc），实测行驶中有效帧率 26-29 fps。
+launch 默认加载 `src/tb3_coordinator/rviz/la_demo.rviz`（只有地图 + landmark + 浮动的 detector debug
+图面板）。把 Gazebo、RViz、debug 图三个窗口手动拖到屏幕左上一块 1920×1080 的区域里平铺
+（建议 Gazebo 960×1080 左列，RViz / debug 各 960×540 右列；这台机器的 WM 不让窗口顶到 y<138），
+然后：
 
 ```bash
-# 起栈后（Nav2 激活、三窗口都已出现）：
-scripts/record_demo.sh arrange          # 摆窗：Gazebo 960x1080 左列，RViz/debug 各 960x540 右列
-scripts/record_demo.sh record reports/media/raw_demo.mp4 900 &   # 30fps NVENC，开录 3s 后自动存首帧检查图
-# 结束：Ctrl+C / kill -INT 录制进程；然后全扫：
-scripts/record_demo.sh check reports/media/raw_demo.mp4          # 15s 间隔抽帧到 *_scan/，逐帧目检
+ffmpeg -f x11grab -framerate 30 -video_size 1920x1080 -i :1.0+0,138 \
+       -c:v h264_nvenc -preset p4 -rc vbr -cq 23 -b:v 0 reports/media/raw_takeN.mp4
 ```
 
-摆窗细节都在脚本里：窗口识别要挑**客户窗**（RViz 会有一个带 "(on <容器id>)" 的
-WM 框架窗同名混进搜索结果，对它 move/resize 全是无效操作）；xdotool 的
-getwindowgeometry 会叠加虚假的边框偏移，脚本以宿主机 `xwininfo` 的绝对坐标为真值
-迭代收敛；WM 拒绝把带装饰的窗放到 y<138，所以布局锚定在 (0,138)。
-录制区域 = 三窗口平铺的精确矩形，区域外的桌面永远不入镜。
+`-i :1.0+0,138` = 显示 :1、屏幕 0、抓取区域左上角 (0,138)。`Ctrl+C` 停。为什么是小窗平铺而不是整屏：
+gzclient 的重绘率与窗口面积成反比（~45 MP/s），整屏 6144×3456 只有 ~4 fps 有效帧；1920×1080 区域
+实测 26–29 fps。
 
-gzclient 偶发全屏灰屏（第二次起栈时出现过）：`pkill gzclient` 后在容器里
-`gzclient &` 重开即可，世界与 gzserver 不受影响。
-
-## 6. 终端 C — 发命令（一律走 send_command.sh）
-
-`ros2 topic pub --once` 丢首条是常态；脚本发布后 grep 栈日志收条，未收到自动重试
-（最多 3 次）。**不要手动双发**——coordinator 的抢占逻辑会把它当成两条指令。
+**x11grab 抓的是屏幕像素，不是窗口**：录制期间这块屏幕上出现的任何东西都入镜——别切工作区、
+别按 Super、关掉通知（R02c、R04、R07 take 2/3 都录进过私人窗口）。录完抽帧看一遍：
 
 ```bash
-cd ~/Desktop/Github_Project/TurtleBot3-semantic-navigation
-./scripts/send_command.sh "go to person" reports/demo/stack.log
+ffmpeg -i reports/media/raw_takeN.mp4 -vf fps=1/15 reports/media/raw_takeN_scan/scan_%03d.jpg
 ```
 
-预期输出 `RECEIVED (attempt 1): go to person`；栈日志同时出现
-`[coordinator_node]: User command: 'go to person'`。
+## 6. 终端 D — 发命令（ros2 topic pub）
+
+```bash
+docker exec -it docker-sim-1 bash
+source /opt/ros/humble/setup.bash && source ~/ws/install/setup.bash
+ros2 topic pub -1 -w 1 /user_command std_msgs/msg/String "{data: 'find the person wearing a green shirt'}"
+```
+
+`-1` 发一条就退出；**`-w 1` 等到有 1 个匹配的订阅者再发**——裸 `--once` 会在 DDS 发现完成前把
+第一条丢掉（这个仓库以前用脚本"发布→grep 日志收条→重试"绕它，`-w` 是 ROS 2 自带的正解）。
+**不要双发**：coordinator 会把第二条当成抢占。
+
+在终端 C 的 `ros2 topic echo /coordinator_node/status` 看到 `TARGET_REACHED`/`TARGET_FAILED` 后
+回到 `IDLE`（到达后 hold，§7.1），再发下一条：
+
+```bash
+ros2 topic pub -1 -w 1 /user_command std_msgs/msg/String "{data: 'go to the bookshelf'}"
+ros2 topic pub -1 -w 1 /user_command std_msgs/msg/String "{data: 'go to the traffic barrier'}"
+ros2 topic pub -1 -w 1 /user_command std_msgs/msg/String "{data: 'find a bicycle'}"
+```
+
+每条命令走了哪条路，看 launch 日志（或终端 B 屏幕）：
+- `Query OK: bookshelf → bookshelf_0 at (x, y)` 紧跟在 `User command` 后 = **memory 直达**；
+- `[search] '...' not in memory — injected into detect vocabulary` = **搜索**（探索/巡逻），之后
+  `[search] FOUND ... at (x, y)` 或 `TARGET NOT FOUND`；
+- `[new_landmark] <class>_<n> pos=(x, y) after N obs (K distinct)` = memory 新晋升了一个 landmark，
+  对照 §9 的真值坐标就知道是不是鬼影；
+- `No valid trajectories` / `Goal stalled ... canceling` = Nav2 卡了一下（§10.11）。
 
 ## 7. 词表 profile 与切换
 
@@ -362,7 +361,7 @@ world 里的三个彩衣 person（绿=中心、蓝=NE、红=SE）由
 按 §7 重启栈（全新 memory）。起栈后**尽早发**（查询宜早发，见 §10）：
 
 ```bash
-./scripts/send_command.sh "go to the trash can" reports/demo/stack.log
+ros2 topic pub -1 -w 1 /user_command std_msgs/msg/String "{data: 'go to the trash can'}\"
 ```
 
 预期 25–125 s（R02c 实测三类搜索均值 ~80 s），关键日志序列：
@@ -383,7 +382,7 @@ Query OK: trash_can → trash can_0 at (...)
 ### 第三段：否定测试（同一栈继续）
 
 ```bash
-./scripts/send_command.sh "go to the bicycle" reports/demo/stack.log
+ros2 topic pub -1 -w 1 /user_command std_msgs/msg/String "{data: 'go to the bicycle'}\"
 ```
 
 bicycle 不在注册表 → 开放词汇路径注入 `'bicycle'` → 探索直到 frontier 耗尽 →
@@ -403,9 +402,9 @@ Query MISS with search suggestion: inject 'bicycle'
 抢占窗口关闭——R02c 踩过两次）。看 Gazebo 里机器人当前位置，选对角方向的目标：
 
 ```bash
-./scripts/send_command.sh "go to the trash can" reports/demo/stack.log
+ros2 topic pub -1 -w 1 /user_command std_msgs/msg/String "{data: 'go to the trash can'}\"
 # 看到日志 [mode] ... → SEMANTIC_NAV（goal accepted）后 2–3 s 内：
-./scripts/send_command.sh "go to person" reports/demo/stack.log
+ros2 topic pub -1 -w 1 /user_command std_msgs/msg/String "{data: 'go to person'}\"
 ```
 
 预期关键日志（第二条入队 → 在途 goal 主动 cancel → 等到终态才派发）：
@@ -439,7 +438,7 @@ R06a 冒烟起点 (-1.5, 0) 离 barrier 1.05 m，前 100 s goal_assignment 一�
 
 ## 10. 已知坑（每条都实测踩过）
 
-1. **`ros2 topic pub --once` 丢首条**：一律走 `scripts/send_command.sh`（发布→收条→重试）。
+1. **`ros2 topic pub --once` 丢首条**：DDS 发现没完成就发了。加 `-w 1`（等到 1 个匹配订阅者再发）即可；仓库里的 `send_command.sh` 是加 `-w` 之前的绕法。
 2. **x11grab 抓顶层窗口**：录屏前 `wmctrl -b add,above` 置顶 + 开录后立刻抽帧目检（§5）；
    录屏期间别在同屏操作其他窗口。
 3. **gzclient 偶发灰屏**（多见于第二次起栈）：`pkill gzclient` 后重开 gzclient；gzserver 无恙。
@@ -497,3 +496,16 @@ R06a 冒烟起点 (-1.5, 0) 离 barrier 1.05 m，前 100 s goal_assignment 一�
    ```
 
 3. 下次继续：`docker compose ... start` → 回 §3 等 /health。
+
+## 12. 可选封装（仓库脚本各自替代了哪条原语）
+
+主流程不依赖这些；它们是 R02c–R07 验收时为了少敲字写的，留着给回放/判卷用。
+
+| 脚本 | 等价原语 | 多做的事 |
+|---|---|---|
+| `scripts/send_command.sh "<cmd>" <log>` | `ros2 topic pub -1 -w 1 /user_command std_msgs/msg/String "{data: '<cmd>'}"` | 发完 grep 日志收条、最多重试 3 次（`-w 1` 之前的绕法） |
+| `reports/R07_probe/demo_take.sh takeN` | 四条 `ros2 topic pub` + `ros2 topic echo /coordinator_node/status` 等 IDLE + `ros2 bag record` | 写 `takeN_timeline.txt`（epoch 时间戳，对视频用） |
+| `scripts/record_demo.sh arrange` | 手动拖窗 | xdotool 把三窗精确平铺成 1920×1080 |
+| `scripts/record_demo.sh record out.mp4` | §5.1 那条 `ffmpeg -f x11grab ...` | 3 s 后自动存首帧检查图 |
+| `scripts/record_demo.sh check out.mp4` | `ffmpeg -vf fps=1/15` 抽帧 | 加逐秒亮度扫描找入侵窗口 |
+| `reports/R07_probe/judge_log.py <log> --mode smoke\|take` | `grep -E "new_landmark\|Query OK\|FOUND\|No valid trajectories\|tf_match\|scan_match" launch.log` | 对照真值坐标算误差、按 R1–R5 规则给 PASS/FAIL |
