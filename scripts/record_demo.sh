@@ -87,12 +87,28 @@ record() {
   wait $FFPID
 }
 
-check() {  # extract a frame every 15 s for the post-recording privacy scan
+check() {  # post-recording privacy scan: 15 s frames to eyeball + automatic intrusion scan
   local vid=$1 outdir
   outdir="${vid%.mp4}_scan"
   mkdir -p "$outdir"
   ffmpeg -loglevel error -y -i "$vid" -vf fps=1/15 "$outdir/scan_%03d.jpg"
   echo "frames in $outdir — eyeball every one before publishing"
+  # R07 take 2 lesson: a foreign window over the Gazebo column changes the
+  # column's mean luminance by ~70 (median ~125). Per-second YAVG of the
+  # Gazebo column, seconds more than 12 from the median = suspects; the
+  # 15 s frame grid above missed a 3 s one. Prints [start,end] runs.
+  ffmpeg -loglevel error -i "$vid" -vf "fps=1,crop=900:1000:10:40,signalstats,metadata=print:key=lavfi.signalstats.YAVG:file=$outdir/yavg_left.txt" -f null -
+  python3 - "$outdir/yavg_left.txt" <<'PY'
+import re, statistics, sys
+v = [float(m.group(1)) for m in re.finditer(r"YAVG=([\d.]+)", open(sys.argv[1]).read())]
+med = statistics.median(v)
+bad = [i for i, x in enumerate(v) if abs(x - med) > 12]
+runs = []
+for t in bad:
+    if runs and t <= runs[-1][1] + 2: runs[-1][1] = t
+    else: runs.append([t, t])
+print("intrusion scan (Gazebo column): median YAVG %.0f, suspect seconds %s" % (med, runs or "none"))
+PY
 }
 
 case "${1:-}" in

@@ -129,8 +129,12 @@ ros2 launch tb3_coordinator full_semantic_nav_la.launch.py \
 打印 wedge 计数（R1）、两个 fallback（R2）、每个 landmark 事件（new_landmark / relabel / held）
 落在哪个真物上或 GHOST、结束 landmark 是否全在真物上（R3）、命令四类任何时刻有无鬼影（R4，
 其它类被 relabel 自愈的列为 self-healed 不算失败）。历史校准（"No valid trajectories" 行数 /
-Goal stalled 次数）：R05 B1 0/3、R05 A2 8/7、R07 冒烟 1 0/5、R07 冒烟 2 **38/11（一次 70 s 卡在
-中心人物旁，判 wedge 未录）**、R06a 0.3 rad/s 868/6。
+Goal stalled 次数）：R05 B1 0/3、R05 A2 8/7、R07 冒烟 1 0/5、R07 冒烟 2 38/11（70 s 卡在中心人物旁，
+fallback 自愈）、R07 take1/2/3 142/·、16/·、32/·、R06a 0.3 rad/s 868/6。
+**R07 定稿判据**：冒烟 R1 = 无 wedge，或 wedge 全部由 fallback 自愈且探索完成（`--mode smoke`）；
+take R1 = 任何 wedge / Nav2 超时即作废（`--mode take`，还打印每条命令 memory 直达/搜索、终态、
+位置误差、耗时，末行 `TAKE PASS/FAIL`）。R07 实测 (1,−1) 起点 5 次起栈 4 次有 wedge（frontier goal
+选在离人/锥桶 0.4–0.8 m 处），严格 take 规则在 frontier 选点净空修好之前基本过不了（§10.11）。
 
 ## 5. 录屏准备（发第一条命令前做完）
 
@@ -145,6 +149,12 @@ launch 默认加载 `src/tb3_coordinator/rviz/la_demo.rviz`：只有地图视图
 （SLAM 地图 + landmark MarkerArray + 机器人 + Nav2 路径）和一块**浮动的**
 la_detector debug image 大面板，Displays/Views/Tool Properties/Time 全部隐藏。
 要全套调试面板时传 `rviz_config:=<绝对路径>/semantic_nav.rviz`。
+
+**R07 又中招一次**：take 2 录到 298–343 s 时一个私人笔记窗口盖住了 Gazebo/RViz 列——正好是
+书架、barrier 两条 memory 直达命令；take 3 录到 GNOME 概览与 Files 窗。录屏期间这块屏幕
+**什么都不能碰**（切工作区、Super 键、通知都会入镜）。`record_demo.sh check` 现在除 15 s 抽帧外
+还自动做逐秒亮度扫描（Gazebo 列 YAVG 偏离中位 >12 的秒段 = 疑似入侵），15 s 网格漏过的 3 s 段
+它能抓到；用 `ffmpeg select='not(between(t,a,b)+...)'` 切掉后再扫一遍到 "none"。
 
 ### 5.2 摆窗与录制（R05 管线：scripts/record_demo.sh）
 
@@ -452,6 +462,21 @@ R06a 冒烟起点 (-1.5, 0) 离 barrier 1.05 m，前 100 s goal_assignment 一�
    goal_assignment 可能一直刷 `Nav2 navigate_to_pose action server not ready`，
    机器人永远不动。判据 = 栈日志出现 `Begin navigating` 或 `[action] Goal accepted`
    再发第一条命令。
+10. **GPU 丢失前置检查要能中止**：`docker exec docker-sim-1 nvidia-smi -L | grep -q "GPU 0" || exit 1`。
+    R07 用 `nvidia-smi -L | head -1 && ...` 写检查，`head` 吞掉了非零退出码，栈在无 GLX 的容器里
+    起了一半（rviz `Unable to create glx context`），白等 5 分钟。起栈后再 grep 一次
+    `GLXContext|process has died` 兜底。
+11. **frontier goal 贴障碍 → DWB wedge**（R07 take1/2/3、冒烟 2 全部中招）：goal_assignment 选的
+    frontier 质心可以离人/锥桶只有 0.4–0.8 m（take1 (2.64,−0.61)、(1.99,−0.26) 贴锥桶；冒烟 2
+    (−0.03,−0.44) 贴中心人；take2 (1.25,2.14) 贴 NE 人），DWB 全部轨迹 "Trajectory Hits Obstacle"，
+    20 s stalled 取消，多数由下一个 goal 或 fallback 自愈。修法（备选清单，未做）：frontier 候选离
+    已知障碍 <0.6 m 不选。
+12. **搜索巡逻与 "exploration complete" 的竞态**（R07 take 3，绿衣搜索因此 900 s 超时）：探索经
+    stalemate 触发 "EXPLORATION COMPLETE" → 巡逻 round 1 起步 → 1 s 后 goal_assignment 报
+    "New frontiers appeared — resuming" → coordinator 收到 complete=False → round 1 扫完后巡逻
+    不再推进、探索又被 coordinator 关着 → 机器人原地 578 s 直到下一条命令抢占。目标本身只在
+    2.6–3.0 m 出现（12 帧全被 2.5 m 范围闸挡掉）。修法（备选清单，未做）：巡逻一旦开始就把
+    complete 标志锁住跑完 4 轮，或 complete 翻回 False 时恢复探索。
 
 ## 11. 关栈
 
