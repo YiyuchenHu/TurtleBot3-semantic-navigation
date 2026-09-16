@@ -81,6 +81,16 @@ semantic_map_memory_node:
     map_topic:                "/map"
     target_frame:             "map"
     tf_timeout:               0.3
+    # R07: base_link->map is looked up AT THE OBSERVATION'S STAMP (the
+    # source image time, carried by semantic_memory_node) instead of the
+    # latest transform. Time(0) meant "the robot's pose when the 1 Hz
+    # memory message arrived", up to 1 s + the 5 s stale window after the
+    # measurement; R06a audit on a 61 s turning bag: on-object 82% -> 68%.
+    # Stamped lookup waits at most tf_stamp_timeout, then falls back to
+    # Time(0) (counted in the gate summary's [tf_match] line).
+    # tf_stamped_lookup: false restores the R06a behaviour.
+    tf_stamped_lookup:        true
+    tf_stamp_timeout:         0.1
     publish_rate:             1.0
 
     # ── Landmark matching ──────────────────────────────────

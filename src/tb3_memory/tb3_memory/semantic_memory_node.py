@@ -18,6 +18,13 @@ Published topics
       - results[0].hypothesis.score     = avg_confidence
       - bbox.center.position.x/y/z     = smoothed position
       - id                              = object_id  (e.g. "person_0")
+      - header.stamp                    = stamp of the LAST observation merged
+                                          into the object (= the source image
+                                          stamp carried by the localizer), so
+                                          a consumer can look up base_link->map
+                                          at the time the position was measured
+                                          instead of at receive time (R07).
+        The array header keeps the publish time.
 
 Parameters  (see config/semantic_memory.yaml)
 ----------
@@ -37,6 +44,7 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 
+from builtin_interfaces.msg import Time
 from vision_msgs.msg import (
     Detection3D,
     Detection3DArray,
@@ -44,6 +52,16 @@ from vision_msgs.msg import (
 )
 
 from tb3_memory.memory_core import MemoryCore, Observation
+
+
+def _sec_to_stamp(t_sec: float) -> Time:
+    """float seconds -> builtin_interfaces/Time (sub-us round trip)."""
+    sec = int(t_sec)
+    nsec = int(round((t_sec - sec) * 1e9))
+    if nsec >= 1_000_000_000:
+        sec += 1
+        nsec -= 1_000_000_000
+    return Time(sec=sec, nanosec=nsec)
 
 
 class SemanticMemoryNode(Node):
@@ -153,7 +171,14 @@ class SemanticMemoryNode(Node):
 
         for obj in active:
             d3 = Detection3D()
-            d3.header = out.header
+            d3.header.frame_id = self._out_frame
+            # R07 memory TF fix: the position is in base_link AT THE TIME
+            # OF THE OBSERVATION; publishing it under the publish-time
+            # stamp made semantic_map_memory_node transform it with the
+            # robot's CURRENT pose (up to 1 s publish period + 5 s stale
+            # window later) — ~10 deg of yaw per 0.4 rad/s turn, R06a
+            # audit: on-object 82% -> 68%. Carry the observation stamp.
+            d3.header.stamp = _sec_to_stamp(obj.last_seen)
 
             hyp = ObjectHypothesisWithPose()
             hyp.hypothesis.class_id = obj.detector_label

@@ -467,6 +467,18 @@ class SemanticMapMemoryNode(Node):
         self.declare_parameter("map_topic", "/map")
         self.declare_parameter("target_frame", "map")
         self.declare_parameter("tf_timeout", 0.3)
+        # R07 memory TF fix: transform each observation with the
+        # base_link->map transform AT ITS OWN header stamp (the source
+        # image time, carried through the localizer and
+        # semantic_memory_node) instead of the latest transform
+        # (Time(0) = the robot's pose when the 1 Hz memory message
+        # arrives, up to 1 s + the 5 s stale window after the
+        # measurement). R06a audit on a 61 s turning bag: on-object
+        # 82% -> 68% was the cost of Time(0). If the stamped lookup
+        # fails within tf_stamp_timeout the old Time(0) lookup is used
+        # and counted ([tf_match] line in the gate summary).
+        self.declare_parameter("tf_stamped_lookup", True)
+        self.declare_parameter("tf_stamp_timeout", 0.1)
         self.declare_parameter("merge_distance", 0.8)
         self.declare_parameter("candidate_merge_distance", 0.8)
         self.declare_parameter("min_observations", 3)
@@ -569,6 +581,12 @@ class SemanticMapMemoryNode(Node):
         map_topic       = self.get_parameter("map_topic").value
         self._frame     = self.get_parameter("target_frame").value
         self._tf_tout   = self.get_parameter("tf_timeout").value
+        self._tf_stamped = bool(self.get_parameter("tf_stamped_lookup").value)
+        self._tf_stamp_tout = float(self.get_parameter("tf_stamp_timeout").value)
+        # [tf_match] counters: stamped lookups that succeeded, fallbacks to
+        # Time(0), observations that carried no stamp, and the summed age
+        # (now - observation stamp) of the stamped ones.
+        self._tf_stats = dict(stamped=0, fallback=0, unstamped=0, age_sum=0.0)
         self._merge_d   = self.get_parameter("merge_distance").value
         self._cand_d    = self.get_parameter("candidate_merge_distance").value
         self._min_obs   = self.get_parameter("min_observations").value
@@ -764,20 +782,13 @@ class SemanticMapMemoryNode(Node):
                 continue
 
             pt_in = PointStamped()
-            pt_in.header.stamp = rclpy.time.Time(seconds=0).to_msg()
             pt_in.header.frame_id = src
             pt_in.point.x = raw_x
             pt_in.point.y = raw_y
 
-            try:
-                pt_out = self._tf_buffer.transform(
-                    pt_in, self._frame,
-                    timeout=Duration(seconds=self._tf_tout))
-            except Exception as exc:  # noqa: BLE001 - same catch as before
-                self._note("tf", label,
-                           "%s->%s %s: %s id=%s"
-                           % (src, self._frame, type(exc).__name__,
-                              str(exc).replace("\n", " ")[:90], obs_id))
+            pt_out = self._transform_observation(pt_in, det.header.stamp,
+                                                 label, obs_id)
+            if pt_out is None:
                 continue
 
             mx, my = pt_out.point.x, pt_out.point.y
@@ -891,6 +902,53 @@ class SemanticMapMemoryNode(Node):
                        "pos=(%.2f,%.2f) r=%.2f id=%s" % (rx, ry, obs_range, obs_id))
             self._candidates.append(Candidate(
                 semantic_class=label, x=rx, y=ry, obs_count=1, last_seen=now))
+
+    def _transform_observation(self, pt_in, obs_stamp, label, obs_id):
+        """base_link -> map for one observation (R07 memory TF fix).
+
+        Stamped lookup at the observation's own stamp (tf_stamp_timeout),
+        falling back to the latest transform (Time(0), tf_timeout) when
+        the stamp is missing or not in the buffer; both outcomes are
+        counted for the [tf_match] line. Returns the transformed
+        PointStamped, or None (the 'tf' gate row is noted) when even the
+        fallback fails."""
+        zero = rclpy.time.Time(seconds=0).to_msg()
+        has_stamp = bool(obs_stamp.sec or obs_stamp.nanosec)
+        if self._tf_stamped and has_stamp:
+            pt_in.header.stamp = obs_stamp
+            try:
+                pt_out = self._tf_buffer.transform(
+                    pt_in, self._frame,
+                    timeout=Duration(seconds=self._tf_stamp_tout))
+                self._tf_stats["stamped"] += 1
+                now_s = self.get_clock().now().nanoseconds * 1e-9
+                self._tf_stats["age_sum"] += max(
+                    0.0, now_s - (obs_stamp.sec + obs_stamp.nanosec * 1e-9))
+                return pt_out
+            except Exception as exc:  # noqa: BLE001 - fall back, count it
+                self._tf_stats["fallback"] += 1
+                self.get_logger().warning(
+                    "[tf_match] %s->%s at obs stamp failed (%s: %s) — "
+                    "falling back to the latest transform"
+                    % (pt_in.header.frame_id, self._frame,
+                       type(exc).__name__,
+                       str(exc).replace("\n", " ")[:80]),
+                    throttle_duration_sec=10.0)
+        elif self._tf_stamped:
+            self._tf_stats["unstamped"] += 1
+
+        pt_in.header.stamp = zero
+        try:
+            return self._tf_buffer.transform(
+                pt_in, self._frame,
+                timeout=Duration(seconds=self._tf_tout))
+        except Exception as exc:  # noqa: BLE001 - same catch as before
+            self._note("tf", label,
+                       "%s->%s %s: %s id=%s"
+                       % (pt_in.header.frame_id, self._frame,
+                          type(exc).__name__,
+                          str(exc).replace("\n", " ")[:90], obs_id))
+            return None
 
     def _check_cross_class_mutex(self, label, x, y):
         """Check if a strong different-class CANDIDATE sits at this location.
@@ -1160,7 +1218,9 @@ class SemanticMapMemoryNode(Node):
                 tuple(sorted(self._stat_in.items())),
                 tuple((row, tuple(sorted(self._stat[row].items())))
                       for row in self.STAT_ROWS),
-                tuple(sorted(self._stat_expired.items())))
+                tuple(sorted(self._stat_expired.items())),
+                (self._tf_stats["stamped"], self._tf_stats["fallback"],
+                 self._tf_stats["unstamped"]))
 
     def _format_gate_summary(self, tag):
         labels = sorted(set(self._stat_in) | set(self._class_min_obs))
@@ -1195,6 +1255,13 @@ class SemanticMapMemoryNode(Node):
                                    self._class_min_obs.get(lb, self._min_obs),
                                    self._stat_expired_last.get(lb, ""))
                                 for lb, n in sorted(self._stat_expired.items()))))
+        ts = self._tf_stats
+        if ts["stamped"] + ts["fallback"] + ts["unstamped"]:
+            lines.append(
+                "  [tf_match] stamped %d, fallback-to-latest %d, unstamped %d, "
+                "mean obs age %.0f ms"
+                % (ts["stamped"], ts["fallback"], ts["unstamped"],
+                   1000.0 * ts["age_sum"] / max(1, ts["stamped"])))
         now = _time.time()
         if self._candidates:
             lines.append("  candidates: " + " | ".join(
