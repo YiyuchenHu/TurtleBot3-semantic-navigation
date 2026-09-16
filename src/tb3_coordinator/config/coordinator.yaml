@@ -86,9 +86,14 @@ semantic_map_memory_node:
     # latest transform. Time(0) meant "the robot's pose when the 1 Hz
     # memory message arrived", up to 1 s + the 5 s stale window after the
     # measurement; R06a audit on a 61 s turning bag: on-object 82% -> 68%.
-    # Stamped lookup waits at most tf_stamp_timeout, then falls back to
-    # Time(0) (counted in the gate summary's [tf_match] line).
-    # tf_stamped_lookup: false restores the R06a behaviour.
+    # If the stamp is not in the TF buffer the lookup falls back to
+    # Time(0) (counted in the gate summary's [tf_match] line). NOTE:
+    # tf_stamp_timeout is an upper bound on blocking, not a useful wait —
+    # this node spins single-threaded and the TransformListener shares
+    # that executor, so no /tf can arrive while the callback waits (R07
+    # review); 0.0 is the equivalent non-blocking choice. R07 smoke:
+    # stamped 222, fallback 0. tf_stamped_lookup: false restores the
+    # R06a behaviour.
     tf_stamped_lookup:        true
     tf_stamp_timeout:         0.1
     publish_rate:             1.0
