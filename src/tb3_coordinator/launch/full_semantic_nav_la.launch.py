@@ -21,6 +21,9 @@ logs a throttled warning until /detect answers).
 Usage:
     ros2 launch tb3_coordinator full_semantic_nav_la.launch.py
     ros2 topic pub --once /user_command std_msgs/String "data: 'go to the bookshelf'"
+
+R07 defaults: spawn (1, -1) for the person world, stock Humble Nav2
+parameters (nav2_params:=... to override), warm-up scan 0.4 rad/s.
 """
 
 import os
@@ -41,13 +44,23 @@ from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 
-# Same world presets as the baseline launch (kept in sync by hand; the
-# table is small and duplicating it beats cross-importing launch files).
+# World presets, same shape as the baseline launch's table (duplicated on
+# purpose; cross-importing launch files is worse). NOT identical any more:
+# the person world's default spawn differs (see the comment below).
 WORLD_PRESETS = {
     "warehouse_models_person": {
         "file":      "warehouse_models_person.world",
-        "default_x": "-1.5",
-        "default_y": "0.0",
+        # R07: (1, -1) instead of the baseline's (-1.5, 0). The R05
+        # jersey barrier sits at x=-2.55 along the west wall, 1.05 m
+        # from (-1.5, 0) — inside the runbook §9 ">= 1.2 m from any
+        # obstacle" rule; the R06a smoke run spent its first 100 s
+        # with goal_assignment reporting "No low-cost sample". (1, -1)
+        # is the start R05 B1 (the reference 4-command run) used:
+        # 1.41 m from the centre person, 1.41 m from the SE person
+        # (2, -2), 1.72 m from the cone (2.4, 0), 1.64 m from the
+        # trash can (0, -2.3), 2 m from the east/south walls.
+        "default_x": "1.0",
+        "default_y": "-1.0",
     },
     "warehouse_models": {
         "file":      "warehouse_semantic_models.world",
@@ -155,13 +168,13 @@ def generate_launch_description():
 
     # ── 2. Nav2 + SLAM (identical to baseline) ──────────────────────────
     dummy_map = os.path.join(pkg_nav2, "maps", "turtlebot3_world.yaml")
-    # R06a step 7: repo-local copy of the Humble defaults with every
-    # angular-velocity limit at 0.3 rad/s (DWB, behavior server, velocity
-    # smoother) — below la_detector's 0.5 rad/s spin gate, so frames
-    # during Nav2 turns still count, and ~4 deg of yaw per /detect
-    # instead of ~13 at the stock 1.0 rad/s. The YOLO baseline launch
-    # keeps the stock file.
-    nav2_params = os.path.join(pkg_coord, "config", "nav2_params_la.yaml")
+    # R07: back to the stock Humble parameters (the R05 configuration,
+    # same file as the baseline launch). R06a step 7 had switched to a
+    # 0.3 rad/s angular-limit copy; its one smoke run wedged at the
+    # centre person (676 "No valid trajectories" vs 0-2 in the R05
+    # logs) and n=1 could not clear the slower DWB sampling as a cause.
+    # That file is kept as config/nav2_params_la_slow.yaml — pass it via
+    # nav2_params:=<abs path> (plus warmup_angular_speed:=0.3) to try it.
     nav2 = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(pkg_nav2, "launch", "bringup_launch.py")
@@ -170,7 +183,7 @@ def generate_launch_description():
             "use_sim_time": use_sim_time,
             "slam": "True",
             "map": dummy_map,
-            "params_file": nav2_params,
+            "params_file": LaunchConfiguration("nav2_params"),
             "autostart": "True",
             "use_composition": "False",
             "log_level": "planner_server:=fatal",
@@ -182,9 +195,13 @@ def generate_launch_description():
         PythonLaunchDescriptionSource(
             os.path.join(pkg_fe, "launch", "exploration.launch.py")
         ),
-        # R06a step 7: the start-up rotation scan also turns at 0.3 rad/s.
-        launch_arguments={"use_sim_time": use_sim_time,
-                          "warmup_angular_speed": "0.3"}.items(),
+        # R07: start-up rotation scan speed is a launch argument again
+        # (default 0.4 rad/s = the R05 value and exploration.launch.py's
+        # own default; R06a step 7 had pinned 0.3 here).
+        launch_arguments={
+            "use_sim_time": use_sim_time,
+            "warmup_angular_speed": LaunchConfiguration("warmup_angular_speed"),
+        }.items(),
     )
 
     # ── 5. Semantic perception chain ──────────────────────────────────────
@@ -314,6 +331,24 @@ def generate_launch_description():
                 "demo shape), la_detector_four_class.yaml (pre-R04 "
                 "default), la_detector_person_only.yaml (R02c "
                 "acceptance)."
+            ),
+        ),
+        DeclareLaunchArgument(
+            "nav2_params",
+            default_value=os.path.join(pkg_nav2, "params", "nav2_params.yaml"),
+            description=(
+                "Nav2 parameter file. Default: the stock Humble "
+                "nav2_bringup file (R05 configuration, same as the "
+                "baseline launch). Option: the absolute path of "
+                "tb3_coordinator/config/nav2_params_la_slow.yaml (every "
+                "angular limit 0.3 rad/s, R06a step 7)."
+            ),
+        ),
+        DeclareLaunchArgument(
+            "warmup_angular_speed", default_value="0.4",
+            description=(
+                "Start-up rotation scan speed in rad/s (R05: 0.4; pair "
+                "0.3 with nav2_params_la_slow.yaml)."
             ),
         ),
         DeclareLaunchArgument(

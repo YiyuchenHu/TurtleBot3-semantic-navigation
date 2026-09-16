@@ -1,4 +1,5 @@
-# nav2_params_la.yaml — Nav2 parameters for the LocateAnything launch.
+# nav2_params_la_slow.yaml — OPTIONAL slow-turn Nav2 parameters for the
+# LocateAnything launch (NOT the default).
 #
 # Copy of /opt/ros/humble/share/nav2_bringup/params/nav2_params.yaml
 # (Humble) with ONE change set (R06a step 7): every angular-velocity
@@ -8,8 +9,16 @@
 # yaw rate (R06a step 1: ~10 deg skew per /detect at 0.4 rad/s), and
 # la_detector's spin gate (max_angular_vel 0.5) stays above this limit
 # so every frame during a Nav2 turn is still a candidate. Everything
-# else is byte-identical to the Humble default; the baseline YOLO launch
-# keeps using the stock file.
+# else is byte-identical to the Humble default.
+#
+# R07 decision: the LA launch went BACK to the stock Humble file (the
+# R05 configuration) — the R06a smoke run with this file wedged at the
+# centre person with 676 "No valid trajectories" (R05 logs: 0-2), and
+# n=1 could not tell whether the 0.3 rad/s DWB sampling made that more
+# likely. Kept as an opt-in:
+#   ros2 launch tb3_coordinator full_semantic_nav_la.launch.py \
+#     nav2_params:=/home/ubuntu/ws/install/tb3_coordinator/share/tb3_coordinator/config/nav2_params_la_slow.yaml \
+#     warmup_angular_speed:=0.3
 amcl:
   ros__parameters:
     use_sim_time: True

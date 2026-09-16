@@ -4,6 +4,7 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 
 
 def generate_launch_description():
@@ -33,8 +34,13 @@ def generate_launch_description():
             package="tb3_frontier_exploration",
             executable="startup_map_warmup_node.py",
             name="startup_map_warmup_node",
+            # ParameterValue(float): a bare LaunchConfiguration is
+            # yaml-parsed, so `warmup_angular_speed:=1` would arrive as an
+            # INTEGER and be rejected by the node's DOUBLE declaration.
             parameters=[{"use_sim_time": use_sim_time,
-                         "scan_angular_speed": LaunchConfiguration("warmup_angular_speed")}],
+                         "scan_angular_speed": ParameterValue(
+                             LaunchConfiguration("warmup_angular_speed"),
+                             value_type=float)}],
             output="screen",
         ),
         Node(

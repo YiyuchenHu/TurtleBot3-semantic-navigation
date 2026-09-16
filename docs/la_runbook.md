@@ -53,6 +53,9 @@ docker compose -f docker/compose.yaml -f docker/compose.local.yaml exec sim \
   bash -c "cd ~/ws && ./build.sh"
 ```
 
+重命名/删除过 config 文件时 colcon 会因旧 build 目录里的残留引用失败（R07 改名
+nav2_params_la.yaml 时踩到），先 `rm -rf build/<pkg> install/<pkg>` 再 build.sh。
+
 ## 3. 终端 A — 起容器，等 /health
 
 ```bash
@@ -66,6 +69,9 @@ docker compose -f docker/compose.yaml -f docker/compose.local.yaml up -d
 ```bash
 until curl -sf http://127.0.0.1:8801/health; do echo waiting...; sleep 5; done; echo
 ```
+
+先在 sim 容器里 `docker exec docker-sim-1 nvidia-smi -L`：报 `NVML: Unknown Error`
+就是丢了 GPU（§10 坑 8），按那条先 restart sim 再 restart grounding。
 
 预期输出（`device` 必须是 `cuda`）：
 
@@ -84,12 +90,23 @@ mkdir -p reports/demo
 docker compose -f docker/compose.yaml -f docker/compose.local.yaml exec sim bash
 ```
 
-进入容器后（起点坐标按 §9 规则选，`AUTO` = 预设 (-1.5, 0)）：
+进入容器后（起点坐标按 §9 规则选，`AUTO` = 预设 **(1, -1)**，R07 起；R05 加 barrier 后
+旧预设 (-1.5, 0) 离它只有 1.05 m，已不合规）：
 
 ```bash
 source /opt/ros/humble/setup.bash && source ~/ws/install/setup.bash
 ros2 launch tb3_coordinator full_semantic_nav_la.launch.py \
-  x_pose:=-1.5 y_pose:=0.0 2>&1 | tee ~/ws/reports/demo/stack.log
+  x_pose:=1.0 y_pose:=-1.0 2>&1 | tee ~/ws/reports/demo/stack.log
+```
+
+R07 最终配置 = 这条命令的默认值：Nav2 用 Humble 原版 `nav2_bringup/params/nav2_params.yaml`
+（R05 配置），起步旋转扫描 0.4 rad/s，memory 层按观测 stamp 查 TF（§7.4）。
+可选慢转版（R06a 步骤 7 的 0.3 rad/s 全套限速，R07 未采用为默认）：
+
+```bash
+ros2 launch tb3_coordinator full_semantic_nav_la.launch.py \
+  nav2_params:=/home/ubuntu/ws/install/tb3_coordinator/share/tb3_coordinator/config/nav2_params_la_slow.yaml \
+  warmup_angular_speed:=0.3 2>&1 | tee ~/ws/reports/demo/stack.log
 ```
 
 启动就绪判据（launch 后 ~25–40 s 内依次出现）：
@@ -101,6 +118,9 @@ ros2 launch tb3_coordinator full_semantic_nav_la.launch.py \
 ```
 
 `[la_stats]` 行每 10 s 一条，`errors=0` 是 grounding 链路健康的持续证据。
+另外两条健康判据（R06a/R07）：localizer 的 `[scan_match] stamp-matched N, fallback-to-latest 0`
+和 semantic_map_memory_node 的 gate summary 里 `[tf_match] stamped N, fallback-to-latest 0`——
+两个 fallback 计数都应为 0 或接近 0（非 0 = 时序退化，见 §7.4）。
 
 ## 5. 录屏准备（发第一条命令前做完）
 
@@ -246,8 +266,36 @@ world 里的三个彩衣 person（绿=中心、蓝=NE、红=SE）由
 * **类级合并半径**（memory，`class_merge_overrides`）：物理尺寸大的类（barrier 2.2 m）
   用自己的合并半径，否则真观测沿 4 m 躯体散布、被切成攒不满的候选。
 
+### 7.4 R06a / R07 的感知时序与解码配置（最终 demo 用的就是这套）
+
+* **localizer 按 stamp 选 scan**（R06a 步骤 1，`scan_stamp_matching`）：射线打进 header stamp
+  最近的 /scan（缓存 25 帧），而不是检测结果到达时的最新 scan（比图像晚 ~350 ms，0.4 rad/s
+  转弯差 ~10°）。转弯帧落在真实物体上 72% → 82%。日志 `[scan_match]`。
+* **memory 层按观测 stamp 查 TF**（R07 步骤 1，`tf_stamped_lookup`/`tf_stamp_timeout` 在
+  coordinator.yaml）：semantic_memory_node 每个 Detection3D 的 header.stamp 现在是**该对象最后
+  一次观测的图像 stamp**，semantic_map_memory_node 按它查 base_link→map（超时 0.1 s，查不到
+  回退 Time(0) 并计数）。之前用 Time(0)：memory 以 1 Hz 重发、对象观测后还"活" 5 s，每次重发
+  都用机器人**当前**位姿投影 → 转弯时同一个观测扫出一段弧（bag_turn 回放：垃圾桶 15 次重发
+  散布 9.2 m → 1.1 m；全部 170 条 memory 检测落在物体上 13% → 49%，范围闸内 29% → 69%）。
+  日志 `[tf_match]`（gate summary 内）。`tf_stamped_lookup: false` 回 R06a 行为。
+* **解码**（R06a 步骤 3）：greedy（argmax，保留 T/top_p 锐化——直接 T=0 会把 MTP 解码打进
+  6 s/帧的重复循环）+ fast 模式 + token 上限 16+24×类别数 + 撞帽自动采样重试；分辨率保持
+  640（512 以下 barrier 检出减半）；两阶段 coverage 实现了但默认关。grounding 容器
+  compose 里 `GROUNDING_SAMPLING=greedy`、`GENERATION_MODE=fast`，`/health` 可核对。
+* **跳帧**（R06a 步骤 4）：FOV 内 3.3 m 无回波、或位移 <0.2 m 且转角 <10° 时不发请求，
+  兜底 2 s 一次。`[la_stats]` 报各规则计数。
+* **短时跟踪**（R06a 步骤 6）：只填 `Detection2D.id`，memory 不读（课程仓 ByteTrack 教训）。
+* **角速度**：R06a 试过全栈 0.3 rad/s，一次冒烟 wedge（676 次 "No valid trajectories"）；
+  R07 决定回 R05 的 Humble 原版 Nav2 参数与 0.4 rad/s 起步扫描，0.3 版留作
+  `nav2_params_la_slow.yaml` 选项（§4）。
+
 ## 8. 演示剧本（建议顺序）
 
+> **R07 最终 demo 剧本 = R05 版剧本，起点固定 (1, -1)，一栈四命令、同一 memory**，
+> 最多录 3 次取第一次四条语义全对的（书架/barrier memory 直达或搜索命中且位置对、绿衣
+> FOUND、bicycle NOT FOUND 零鬼影；Nav2 超时或 wedge 算失败重录，不剪掉遮掩）。
+> 成片 `reports/media/demo_final.mp4`，分段时间表在 `reports/R07_final_demo.md`。
+>
 > **R05 版剧本（当前默认 profile）= 一栈四命令、同一 memory**（陌生起点，≥1.2 m 净空）：
 > ① `find the person wearing a green shirt`（搜索注入→彩衣分辨→REACHED→IDLE；
 >    期间探索顺带把注册表类建进 memory）
@@ -260,7 +308,7 @@ world 里的三个彩衣 person（绿=中心、蓝=NE、红=SE）由
 > 下面的四段旧剧本基于四类建图 profile，跑它先切
 > `detector_config:=.../la_detector_four_class.yaml`。
 
-### 第一段：四类词表（起点 `AUTO` 即 (-1.5, 0)）
+### 第一段：四类词表（历史剧本；当时起点 `AUTO` = (-1.5, 0)，R07 起 `AUTO` = (1, -1)）
 
 栈起来后**先让它自主探索 60–90 s**（四类都在词表里，探索路上直接建图；person 晋升门槛 8）。
 然后依次发四条命令，每条等 `TARGET_REACHED` 再发下一条：
@@ -338,17 +386,22 @@ Query OK: person → person_N ...
 
 ## 9. 起点选择规则
 
-**离任何障碍中心 ≥ 1.2 m**（近了 spawn 净空不足，R02b (0.75, 0.75) 实翻过车）。
-障碍中心：5 个 person 在 (0,0)、(±2,±2)；bookshelf (0, 2.6)；trash can (0, -2.3)；
-cone (2.4, 0)；四面墙在 ±3 m。
+**离任何障碍中心 ≥ 1.2 m**（近了 spawn 净空不足，R02b (0.75, 0.75) 实翻过车；
+R06a 冒烟起点 (-1.5, 0) 离 barrier 1.05 m，前 100 s goal_assignment 一直 "No low-cost sample"）。
+障碍中心（R05 world）：person 在 (0,0)、(2,2)、(2,-2)、**(-1.2, 1.8)、(-1.2, -1.8)**
+（两个白衣人 R05 从 (-2,±2) 内移）；bookshelf (0, 2.6)；trash can (0, -2.3)；cone (2.4, 0)；
+**jersey barrier x=-2.55、y∈[-2, 2]**（R05 新增）；四面墙在 ±3 m。
 
-验证过的起点（R02b/R02c 各 run 实际用过）：
+验证过的起点（按 R05 world 复核过 1.2 m 规则）：
 
-| 起点 | 出处 |
-|---|---|
-| `(-1.5, 0.0)` | 默认预设（`AUTO`），R02c run C |
-| `(-1.0, -1.0)` | R02c run A |
-| `(1.0, 1.0)` | R02c run B |
+| 起点 | 最近障碍 | 出处 |
+|---|---|---|
+| **`(1.0, -1.0)`** | 中心/SE person 1.41 m | **默认预设（`AUTO`，R07 起）**，R05 B1、R07 最终 demo |
+| `(0.5, 1.5)` | NW person 1.73 m、中心 1.58 m | R05 A2/A3 |
+| `(-1.0, -1.5)` | SW person 0.36 m ✗ | R05 B2（当时能起，但违反规则，不再推荐） |
+| `(1.0, 1.0)` | 中心/NE person 1.41 m | R02c run B |
+| `(-1.5, 0.0)` | barrier 1.05 m ✗ | 旧默认预设，R02c run C / R06a 冒烟——**R05 加 barrier 后不合规** |
+| `(-1.0, -1.0)` | SW person 0.82 m ✗ | R02c run A——**R05 移人后不合规** |
 
 ## 10. 已知坑（每条都实测踩过）
 
