@@ -361,7 +361,7 @@ world 里的三个彩衣 person（绿=中心、蓝=NE、红=SE）由
 按 §7 重启栈（全新 memory）。起栈后**尽早发**（查询宜早发，见 §10）：
 
 ```bash
-ros2 topic pub -1 -w 1 /user_command std_msgs/msg/String "{data: 'go to the trash can'}\"
+ros2 topic pub -1 -w 1 /user_command std_msgs/msg/String "{data: 'go to the trash can'}"
 ```
 
 预期 25–125 s（R02c 实测三类搜索均值 ~80 s），关键日志序列：
@@ -382,7 +382,7 @@ Query OK: trash_can → trash can_0 at (...)
 ### 第三段：否定测试（同一栈继续）
 
 ```bash
-ros2 topic pub -1 -w 1 /user_command std_msgs/msg/String "{data: 'go to the bicycle'}\"
+ros2 topic pub -1 -w 1 /user_command std_msgs/msg/String "{data: 'go to the bicycle'}"
 ```
 
 bicycle 不在注册表 → 开放词汇路径注入 `'bicycle'` → 探索直到 frontier 耗尽 →
@@ -402,9 +402,9 @@ Query MISS with search suggestion: inject 'bicycle'
 抢占窗口关闭——R02c 踩过两次）。看 Gazebo 里机器人当前位置，选对角方向的目标：
 
 ```bash
-ros2 topic pub -1 -w 1 /user_command std_msgs/msg/String "{data: 'go to the trash can'}\"
+ros2 topic pub -1 -w 1 /user_command std_msgs/msg/String "{data: 'go to the trash can'}"
 # 看到日志 [mode] ... → SEMANTIC_NAV（goal accepted）后 2–3 s 内：
-ros2 topic pub -1 -w 1 /user_command std_msgs/msg/String "{data: 'go to person'}\"
+ros2 topic pub -1 -w 1 /user_command std_msgs/msg/String "{data: 'go to person'}"
 ```
 
 预期关键日志（第二条入队 → 在途 goal 主动 cancel → 等到终态才派发）：
