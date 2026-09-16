@@ -25,12 +25,16 @@ def generate_launch_description():
         DeclareLaunchArgument("odom_topic", default_value="/odometry/filtered",
                              description="Odometry topic for goal assignment"),
 
+        DeclareLaunchArgument("warmup_angular_speed", default_value="0.4",
+                             description="Start-up rotation scan speed (rad/s)"),
+
         # One-shot cmd_vel rotation scan; signals exploration_warmup_complete when done.
         Node(
             package="tb3_frontier_exploration",
             executable="startup_map_warmup_node.py",
             name="startup_map_warmup_node",
-            parameters=[{"use_sim_time": use_sim_time}],
+            parameters=[{"use_sim_time": use_sim_time,
+                         "scan_angular_speed": LaunchConfiguration("warmup_angular_speed")}],
             output="screen",
         ),
         Node(

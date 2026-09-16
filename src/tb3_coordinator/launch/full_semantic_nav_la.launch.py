@@ -155,7 +155,13 @@ def generate_launch_description():
 
     # ── 2. Nav2 + SLAM (identical to baseline) ──────────────────────────
     dummy_map = os.path.join(pkg_nav2, "maps", "turtlebot3_world.yaml")
-    nav2_params = os.path.join(pkg_nav2, "params", "nav2_params.yaml")
+    # R06a step 7: repo-local copy of the Humble defaults with every
+    # angular-velocity limit at 0.3 rad/s (DWB, behavior server, velocity
+    # smoother) — below la_detector's 0.5 rad/s spin gate, so frames
+    # during Nav2 turns still count, and ~4 deg of yaw per /detect
+    # instead of ~13 at the stock 1.0 rad/s. The YOLO baseline launch
+    # keeps the stock file.
+    nav2_params = os.path.join(pkg_coord, "config", "nav2_params_la.yaml")
     nav2 = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(pkg_nav2, "launch", "bringup_launch.py")
@@ -176,7 +182,9 @@ def generate_launch_description():
         PythonLaunchDescriptionSource(
             os.path.join(pkg_fe, "launch", "exploration.launch.py")
         ),
-        launch_arguments={"use_sim_time": use_sim_time}.items(),
+        # R06a step 7: the start-up rotation scan also turns at 0.3 rad/s.
+        launch_arguments={"use_sim_time": use_sim_time,
+                          "warmup_angular_speed": "0.3"}.items(),
     )
 
     # ── 5. Semantic perception chain ──────────────────────────────────────
