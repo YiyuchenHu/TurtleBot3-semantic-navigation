@@ -160,7 +160,15 @@ semantic_map_memory_node:
     # and exploration may give the object only one viewing pass — R02b
     # §5.1 measured sparse-view candidates expiring at 7/8. 5 still
     # rejects the run-1 ghost pattern (3 stray observations).
-    search_min_observations:   5
+    # R05: 5 -> 3. The R04 rationale (filter the run-1 ghost pattern of
+    # 3 stray observations) is now carried by three newer gates the
+    # promotion path did not have: the localizer height gate, the
+    # detector containment veto and the same-family exemption. What 5
+    # costs is recall: the low camera sees a colored shirt in only ~10%
+    # of frames (R05 probe: 6/60 frames carry a green-expression box,
+    # all of them correct), and after the range/edge/height gates a
+    # 13-minute search accumulated 26 observations without reaching 5.
+    search_min_observations:   3
     # Candidate expiry for the ACTIVE search class only. The generic
     # candidate_timeout (45 s) assumes the mapping path's steady stream;
     # a searched class is seen only when exploration happens to face it
