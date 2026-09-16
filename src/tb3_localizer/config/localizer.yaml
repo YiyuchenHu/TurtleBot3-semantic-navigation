@@ -68,6 +68,20 @@ localizer_node:
     height_priors: ["person:1.75", "bookshelf:1.2:1.5", "trash can:0.6:1.5",
                     "traffic cone:0.9:1.4", "concrete barrier:1.1"]
 
+    # ── Scan ↔ image stamp matching (R06a) ────────────────
+    # The detections carry the SOURCE IMAGE stamp; the ray must be cast
+    # into the scan taken at that time, not into whatever scan arrived
+    # last when the detections came back from the grounding server
+    # (~0.35-0.5 s later — ~10° of yaw at 0.4 rad/s). R06a audit, 61 s
+    # turning bag, 94 turning boxes: on-object 69% → 81% with matching.
+    # Scans are buffered (scan_buffer_len ≈ 5 s at 5 Hz) and the nearest
+    # header stamp wins; if it is further than scan_match_max_dt_sec from
+    # the image stamp (unsynchronised clocks) the latest scan is used and
+    # the fallback is counted in the periodic [scan_match] log line.
+    scan_stamp_matching: true
+    scan_match_max_dt_sec: 0.25
+    scan_buffer_len: 25
+
     # ── Topics ────────────────────────────────────────────
     detections_topic: "/detector_node/detections"
     scan_topic:       "/scan"

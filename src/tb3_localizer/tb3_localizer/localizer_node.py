@@ -31,6 +31,7 @@ Parameters  (see config/localizer.yaml)
 
 from __future__ import annotations
 
+import collections
 import math
 
 import rclpy
@@ -92,6 +93,21 @@ class LocalizerNode(Node):
         self.declare_parameter("height_priors", [
             "person:1.75", "bookshelf:1.2:1.5", "trash can:0.6:1.5",
             "traffic cone:0.9:1.4", "concrete barrier:1.1"])
+        # ── Scan/stamp matching (R06a step 1) ────────────────────────
+        # The Detection2DArray carries the SOURCE IMAGE stamp, but the
+        # ray used to be cast into whatever /scan had arrived last when
+        # the detections arrived — i.e. the scan taken ~RTT (0.35-0.5 s)
+        # AFTER the image. At 0.4 rad/s that is a ~10 deg yaw skew
+        # between the bbox bearing and the scan: R06a audit over a 61 s
+        # turning bag, 94 turning boxes: on-object 69% -> 81% once the
+        # ray is cast into the scan whose stamp is nearest the image
+        # stamp (a cone box at 3.1 m was hitting a person's leg at 1.1 m
+        # with the late scan). Scans are buffered and matched by header
+        # stamp; if the nearest one is older than `scan_match_max_dt_sec`
+        # the latest scan is used as before (and counted in the stats).
+        self.declare_parameter("scan_stamp_matching", True)
+        self.declare_parameter("scan_match_max_dt_sec", 0.25)
+        self.declare_parameter("scan_buffer_len", 25)
         self.declare_parameter("detections_topic", "/detector_node/detections")
         self.declare_parameter("scan_topic", "/scan")
         self.declare_parameter("image_topic", "/camera/image_raw")
@@ -114,6 +130,9 @@ class LocalizerNode(Node):
                 tol = float(parts[2]) if len(parts) >= 3 else self._hgate_tol
                 self._height_priors[parts[0].strip().lower()] = \
                     (float(parts[1]), tol)
+        self._scan_match = bool(self.get_parameter("scan_stamp_matching").value)
+        self._scan_max_dt = float(self.get_parameter("scan_match_max_dt_sec").value)
+        scan_buf_len     = int(self.get_parameter("scan_buffer_len").value)
         det_topic        = self.get_parameter("detections_topic").value
         scan_topic       = self.get_parameter("scan_topic").value
         image_topic      = self.get_parameter("image_topic").value
@@ -131,6 +150,9 @@ class LocalizerNode(Node):
 
         # ── State: latest scan and image size ─────────────────────────────
         self._latest_scan: LaserScan | None = None
+        # (stamp_sec, scan), newest last; ~5 s at the 5 Hz sim LiDAR.
+        self._scan_buf: collections.deque = collections.deque(maxlen=scan_buf_len)
+        self._scan_match_stats = dict(matched=0, fallback=0, dt_sum=0.0)
         self._image_width: int = 0
         self._image_height: int = 0
         self._hgate_dropped: dict[str, int] = {}
@@ -172,9 +194,10 @@ class LocalizerNode(Node):
 
         self.get_logger().info(
             "LocalizerNode ready  "
-            "hfov=%.1f°  scan_window=%d  range=[%.2f, %.2f]  edge_margin=%dpx  frame=%s"
+            "hfov=%.1f°  scan_window=%d  range=[%.2f, %.2f]  edge_margin=%dpx  frame=%s  "
+            "scan_stamp_matching=%s (max_dt=%.2fs)"
             % (hfov_deg, scan_window_half, min_range, max_range, edge_margin,
-               self._out_frame)
+               self._out_frame, self._scan_match, self._scan_max_dt)
         )
 
     def _log_edge_summary(self) -> None:
@@ -192,11 +215,45 @@ class LocalizerNode(Node):
             self.get_logger().info(
                 "[height_gate] dropped per class: " + "  ".join(
                     "%s %d" % kv for kv in sorted(self._hgate_dropped.items())))
+        sm = self._scan_match_stats
+        if sm["matched"] + sm["fallback"]:
+            self.get_logger().info(
+                "[scan_match] stamp-matched %d, fallback-to-latest %d, "
+                "mean |scan-image dt| %.0f ms"
+                % (sm["matched"], sm["fallback"],
+                   1000.0 * sm["dt_sum"] / max(1, sm["matched"])))
 
     # ── Callbacks ─────────────────────────────────────────────────────────
 
     def _scan_cb(self, msg: LaserScan) -> None:
         self._latest_scan = msg
+        self._scan_buf.append(
+            (msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9, msg))
+
+    def _scan_for_stamp(self, stamp) -> LaserScan | None:
+        """Scan whose header stamp is nearest the detection (= image)
+        stamp; the latest scan when matching is off, the buffer is empty
+        or the nearest one is further than `scan_match_max_dt_sec` away
+        (unsynchronised stamps, e.g. a bag without /clock)."""
+        if not self._scan_match or not self._scan_buf:
+            return self._latest_scan
+        t = stamp.sec + stamp.nanosec * 1e-9
+        best_dt, best = None, None
+        for ts, sc in self._scan_buf:
+            dt = abs(ts - t)
+            if best_dt is None or dt < best_dt:
+                best_dt, best = dt, sc
+        if best_dt is None or best_dt > self._scan_max_dt:
+            self._scan_match_stats["fallback"] += 1
+            self.get_logger().warning(
+                "[scan_match] nearest scan is %.2fs from the image stamp "
+                "(> %.2fs) — using the latest scan"
+                % (best_dt if best_dt is not None else -1.0, self._scan_max_dt),
+                throttle_duration_sec=10.0)
+            return self._latest_scan
+        self._scan_match_stats["matched"] += 1
+        self._scan_match_stats["dt_sum"] += best_dt
+        return best
 
     def _image_cb(self, msg: Image) -> None:
         if self._image_width == 0:
@@ -246,7 +303,7 @@ class LocalizerNode(Node):
         return True
 
     def _detections_cb(self, msg: Detection2DArray) -> None:
-        scan = self._latest_scan
+        scan = self._scan_for_stamp(msg.header.stamp)
         if scan is None:
             return
         if self._image_width <= 0:
