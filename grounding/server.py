@@ -130,10 +130,12 @@ class GroundingHandler(BaseHTTPRequestHandler):
         # One line per request with the stage split — the R06a smoke
         # reads these back for the latency distribution.
         print("[timing] %s cats=%d total=%.0f vision=%.0f prefill=%.0f "
-              "decode=%.0f steps=%s boxes=%d"
+              "decode=%.0f steps=%s boxes=%d%s"
               % (path, len(categories) if path == "/detect" else 1, latency_ms,
                  tm.get("vision_ms", 0.0), tm.get("prefill_ms", 0.0),
-                 tm.get("decode_ms", 0.0), tm.get("decode_steps", "-"), len(boxes)),
+                 tm.get("decode_ms", 0.0), tm.get("decode_steps", "-"), len(boxes),
+                 " RETRIED_AFTER_CAP(first=%.0f)" % tm["first_attempt_ms"]
+                 if tm.get("retried_after_cap") else ""),
               flush=True)
 
         width, height = _image_size(image_bytes)

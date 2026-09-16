@@ -98,9 +98,13 @@ def resolve_dtype(name: str, device: str):
 #   max_side        : resize the input so its longer side is <= this many
 #                     px before the processor (0 = native). Boxes are
 #                     always returned in the ORIGINAL pixel space.
+#   cap_retry_sample: greedy can lock into a deterministic repeat loop on
+#                     rare frames (R06a replay: 3 of ~400 requests ran to
+#                     the token cap with 0-1 boxes); when a greedy call
+#                     hits max_new_tokens, retry once with sampling.
 DEFAULT_OPTIONS = dict(generation_mode="hybrid", do_sample=True,
                        temperature=0.7, top_p=0.9, repetition_penalty=1.1,
-                       max_new_tokens=2048, max_side=0)
+                       max_new_tokens=2048, max_side=0, cap_retry_sample=True)
 
 
 class LocateAnythingBackend:
@@ -267,7 +271,18 @@ class LocateAnythingBackend:
     def _generate(self, image_bytes: bytes, question: str,
                   options: dict | None = None):
         with self._gen_lock:
-            return self._generate_locked(image_bytes, question, options)
+            answer, w, h = self._generate_locked(image_bytes, question, options)
+            t = self.last_timing
+            if (t.get("cap_hit") and not t["options"]["do_sample"]
+                    and t["options"]["cap_retry_sample"]):
+                first = dict(t)
+                retry = dict(options or {})
+                retry["do_sample"] = True
+                answer, w, h = self._generate_locked(image_bytes, question, retry)
+                self.last_timing["retried_after_cap"] = True
+                self.last_timing["first_attempt_ms"] = first["total_ms"]
+                self.last_timing["total_ms"] += first["total_ms"]
+            return answer, w, h
 
     def _generate_locked(self, image_bytes: bytes, question: str,
                          options: dict | None = None):
@@ -372,6 +387,12 @@ class LocateAnythingBackend:
         ans = answer[0] if isinstance(answer, (list, tuple)) else answer
         timing["answer_len"] = len(ans or "")
         timing["n_box_tokens"] = (ans or "").count("<box>")
+        # Cap detection: the loop stops on <|im_end|> or on length; an
+        # answer without the end token that is (re)tokenized to the cap
+        # is a runaway.
+        n_gen = len(self._tokenizer(ans or "", add_special_tokens=False).input_ids)
+        timing["gen_tokens"] = int(n_gen)
+        timing["cap_hit"] = bool(n_gen >= int(opts["max_new_tokens"]) - 8)
 
         # This revision's generate() returns the decoded string for the
         # new tokens directly (special tokens kept — <box> markers are
