@@ -9,7 +9,7 @@
 
 ## 1. 总览与架构
 
-一次完整演示 = 容器（docker，§3）+ 逐节点手动起栈（每个节点一个终端，`ros2 run`/官方 `ros2 launch`，§4）+ 观察（ros2 node/topic/param，§5）+ 发命令（ros2 topic pub，§6）。全部是 docker 与 ros2 原语，不依赖本仓库的脚本；本仓库的 launch 文件只在 §4.8 作为可选一键版，脚本只在 §12 作为可选封装列出。
+一次完整演示 = 容器（docker，§3）+ 逐节点手动起栈（Gazebo 一条 launch、其余每个节点一个终端 `ros2 run`，§4）+ 观察（ros2 node/topic/param，§5）+ 发命令（ros2 topic pub，§6）。全部是 docker 与 ros2 原语，不依赖本仓库的脚本；本仓库的 launch 文件只在 §4.8 作为可选一键版，脚本只在 §12 作为可选封装列出。
 
 ```mermaid
 flowchart LR
@@ -101,24 +101,25 @@ source ~/ws/install/setup.bash                      # 本工作空间 overlay
 ROS 图；容器里 `TURTLEBOT3_MODEL=waffle_pi` 已经设好（compose）。下面每个终端起完就别动它，
 `Ctrl+C` 就是关那个节点。
 
-### 4.1 终端 1 — Gazebo 世界 + 机器人（ROS 官方 launch）
+### 4.1 终端 1 — Gazebo 世界 + 机器人（一条 launch，参数选世界与起点）
 
 ```bash
-export GAZEBO_MODEL_PATH=$GAZEBO_MODEL_PATH:$HOME/ws/src/tb3_frontier_exploration/models   # 彩衣人模型
-ros2 launch gazebo_ros gzserver.launch.py \
-    world:=$HOME/ws/install/tb3_frontier_exploration/share/tb3_frontier_exploration/worlds/warehouse_models_person.world
+ros2 launch tb3_frontier_exploration gazebo_sim.launch.py                       # 默认：person world，起点 (1, -1)
+ros2 launch tb3_frontier_exploration gazebo_sim.launch.py --show-args           # 看全部参数
+ros2 launch tb3_frontier_exploration gazebo_sim.launch.py world:=warehouse_models x_pose:=-1.2 y_pose:=-1.2
+ros2 launch tb3_frontier_exploration gazebo_sim.launch.py world:=/abs/path/other.world gui:=false
 ```
 
-第二个终端（同样先进容器 + source）起 GUI、机器人描述、放机器人：
+参数：`world`（别名 `warehouse_models_person` / `warehouse_models` / `detector_test`，或 .world 绝对路径）、
+`x_pose` `y_pose`（起点，§9 规则）、`gui`（false = 不开 gzclient）、`use_sim_time`。
+它里面就是四个官方 launch（gazebo_ros 的 gzserver / gzclient，turtlebot3_gazebo 的
+robot_state_publisher / spawn_turtlebot3）加一行把仓库的 `models/`（彩衣人）追加到 `GAZEBO_MODEL_PATH`；
+文件 `src/tb3_frontier_exploration/launch/gazebo_sim.launch.py`，70 行，可以照着改。
 
-```bash
-ros2 launch gazebo_ros gzclient.launch.py                                  # Gazebo 窗口；灰屏就 Ctrl+C 重开
-ros2 launch turtlebot3_gazebo robot_state_publisher.launch.py use_sim_time:=true   # 另一个终端
-ros2 launch turtlebot3_gazebo spawn_turtlebot3.launch.py x_pose:=1.0 y_pose:=-1.0   # 另一个终端，放完就退出
-```
-
-（这三条是 gazebo_ros / turtlebot3_gazebo 自带的 launch，任何 TurtleBot3 项目都一样。）
-核对：`ros2 topic hz /scan`、`ros2 topic hz /camera/image_raw`、`ros2 topic echo /odom --once`。
+核对：`ros2 service list | grep spawn`（/spawn_entity 出现 = gzserver 真正就绪）、`ros2 topic hz /scan`、
+`ros2 topic hz /camera/image_raw`。
+spawn 报 `Service /spawn_entity unavailable` 而 gzserver 在跑 = 容器丢了 GPU（§10.8），先
+`docker exec docker-sim-1 nvidia-smi -L`。gzclient 灰屏：`Ctrl+C` 后单独 `ros2 launch gazebo_ros gzclient.launch.py`。
 
 ### 4.2 终端 2 — Nav2 + SLAM（nav2_bringup 官方 launch）
 
