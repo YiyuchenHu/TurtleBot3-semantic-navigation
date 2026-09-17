@@ -9,7 +9,7 @@
 
 ## 1. 总览与架构
 
-一次完整演示 = 4 个终端：A 容器（docker）/ B ROS 栈（source + ros2 launch）/ C 观察（ros2 node/topic/param）/ D 发命令（ros2 topic pub）。全部是 docker 与 ros2 原语，不依赖本仓库的脚本；脚本只在 §12 作为可选封装列出。
+一次完整演示 = 容器（docker，§3）+ 逐节点手动起栈（每个节点一个终端，`ros2 run`/官方 `ros2 launch`，§4）+ 观察（ros2 node/topic/param，§5）+ 发命令（ros2 topic pub，§6）。全部是 docker 与 ros2 原语，不依赖本仓库的脚本；本仓库的 launch 文件只在 §4.8 作为可选一键版，脚本只在 §12 作为可选封装列出。
 
 ```mermaid
 flowchart LR
@@ -86,34 +86,152 @@ docker exec -it docker-sim-1 bash -c "cd ~/ws && source /opt/ros/humble/setup.ba
 
 重命名/删除过 config 文件时先 `rm -rf build/<pkg> install/<pkg>` 再 build（旧 build 目录残留引用）。
 
-## 4. 终端 B — 起 ROS 栈（source + ros2 launch）
+## 4. 逐节点手动起栈（每个节点一个终端）
+
+不用本仓库的 `full_semantic_nav_la.launch.py`。栈里一共 6 层，每层一个终端；每个终端都先做同样的
+三行"进容器 + source"：
 
 ```bash
-docker exec -it docker-sim-1 bash                     # 进容器；以下都在容器内
-source /opt/ros/humble/setup.bash                     # ROS 2 底座
-source ~/ws/install/setup.bash                        # 本工作空间 overlay（每个新 shell 都要 source 这两行）
+docker exec -it docker-sim-1 bash                   # 进容器（-i 交互，-t 分配终端）；退出用 exit
+source /opt/ros/humble/setup.bash                   # ROS 2 底座
+source ~/ws/install/setup.bash                      # 本工作空间 overlay
+```
+
+`docker exec` 每次都是在**同一个已运行的容器**里开一个新 shell，所以任意多个终端都能看到同一套
+ROS 图；容器里 `TURTLEBOT3_MODEL=waffle_pi` 已经设好（compose）。下面每个终端起完就别动它，
+`Ctrl+C` 就是关那个节点。
+
+### 4.1 终端 1 — Gazebo 世界 + 机器人（ROS 官方 launch）
+
+```bash
+export GAZEBO_MODEL_PATH=$GAZEBO_MODEL_PATH:$HOME/ws/src/tb3_frontier_exploration/models   # 彩衣人模型
+ros2 launch gazebo_ros gzserver.launch.py \
+    world:=$HOME/ws/install/tb3_frontier_exploration/share/tb3_frontier_exploration/worlds/warehouse_models_person.world
+```
+
+第二个终端（同样先进容器 + source）起 GUI、机器人描述、放机器人：
+
+```bash
+ros2 launch gazebo_ros gzclient.launch.py                                  # Gazebo 窗口；灰屏就 Ctrl+C 重开
+ros2 launch turtlebot3_gazebo robot_state_publisher.launch.py use_sim_time:=true   # 另一个终端
+ros2 launch turtlebot3_gazebo spawn_turtlebot3.launch.py x_pose:=1.0 y_pose:=-1.0   # 另一个终端，放完就退出
+```
+
+（这三条是 gazebo_ros / turtlebot3_gazebo 自带的 launch，任何 TurtleBot3 项目都一样。）
+核对：`ros2 topic hz /scan`、`ros2 topic hz /camera/image_raw`、`ros2 topic echo /odom --once`。
+
+### 4.2 终端 2 — Nav2 + SLAM（nav2_bringup 官方 launch）
+
+```bash
+ros2 launch nav2_bringup bringup_launch.py \
+    use_sim_time:=true slam:=True autostart:=True use_composition:=False \
+    map:=/opt/ros/humble/share/nav2_bringup/maps/turtlebot3_world.yaml \
+    params_file:=/opt/ros/humble/share/nav2_bringup/params/nav2_params.yaml
+```
+
+`slam:=True` 起 slam_toolbox 提供 /map 与 map→odom；`map:=` 只是 bringup 的必填占位。
+R07 最终配置就是 Humble 原版 `nav2_params.yaml`；慢转版换成
+`params_file:=$HOME/ws/install/tb3_coordinator/share/tb3_coordinator/config/nav2_params_la_slow.yaml`。
+核对：`ros2 action list` 里有 `/navigate_to_pose`；`ros2 topic hz /map`；`ros2 lifecycle list /controller_server`
+（或 `ros2 lifecycle get /controller_server` → active）。
+
+### 4.3 终端 3 — 感知链（4 个节点，`ros2 run` + `--params-file`）
+
+每个都是 `ros2 run <包> <可执行> --ros-args --params-file <yaml> -p use_sim_time:=true`，四个终端：
+
+```bash
+# 3a 检测：调 grounding 容器的 POST /detect，发 /detector_node/detections + debug 图
+ros2 run tb3_detector la_detector_node --ros-args \
+    --params-file $HOME/ws/install/tb3_detector/share/tb3_detector/config/la_detector.yaml \
+    -p use_sim_time:=true
+
+# 3b 定位：像素 bearing × LiDAR 距离 → /localizer_node/localized_objects（base_link）
+ros2 run tb3_localizer localizer_node --ros-args \
+    --params-file $HOME/ws/install/tb3_localizer/share/tb3_localizer/config/localizer.yaml \
+    -p use_sim_time:=true
+
+# 3c 短时记忆：观测聚合、1 Hz 重发 → /semantic_memory_node/objects
+ros2 run tb3_memory semantic_memory_node --ros-args \
+    --params-file $HOME/ws/install/tb3_memory/share/tb3_memory/config/semantic_memory.yaml \
+    -p use_sim_time:=true
+
+# 3d 地图记忆：TF 到 map、占据栅格校验、候选→landmark → /semantic_map_memory_node/landmark_objects + RViz 标记
+ros2 run tb3_coordinator semantic_map_memory_node --ros-args \
+    --params-file $HOME/ws/install/tb3_coordinator/share/tb3_coordinator/config/coordinator.yaml \
+    -p use_sim_time:=true
+```
+
+核对：`ros2 topic hz /detector_node/detections`（~0.7–0.9 Hz）、`ros2 topic hz /localizer_node/localized_objects`、
+`ros2 topic hz /semantic_memory_node/objects`（1 Hz）、`ros2 topic echo /semantic_map_memory_node/landmark_objects --once`。
+3a 起来时 grounding 没就绪会刷 `waiting for grounding server`（无害）。
+
+### 4.4 终端 4 — 探索（3 个节点）
+
+```bash
+# 4a 起步旋转扫描（一次性，0.4 rad/s，扫完发 exploration_warmup_complete 后可以 Ctrl+C）
+ros2 run tb3_frontier_exploration startup_map_warmup_node.py --ros-args \
+    -p use_sim_time:=true -p scan_angular_speed:=0.4
+
+# 4b frontier 检测（/map + /global_costmap/costmap → /frontiers）
+ros2 run tb3_frontier_exploration frontier_detection_node --ros-args \
+    --params-file $HOME/ws/install/tb3_frontier_exploration/share/tb3_frontier_exploration/config/params.yaml \
+    -p use_sim_time:=true
+
+# 4c 目标分配（选 frontier → NavigateToPose；探索完发 /exploration_complete）
+ros2 run tb3_frontier_exploration goal_assignment_node --ros-args \
+    --params-file $HOME/ws/install/tb3_frontier_exploration/share/tb3_frontier_exploration/config/params.yaml \
+    -p use_sim_time:=true
+```
+
+核对：`ros2 topic echo /frontiers --once`；4c 日志出现 `[action] Goal accepted (frontier)` = 机器人开始动。
+
+### 4.5 终端 5 — 语义查询 + 目标适配 + 协调器（3 个节点）
+
+```bash
+# 5a 查询：命令文本 → registry 类名 → 从 landmark 里选目标；LA 词表的 registry 要显式传
+ros2 run tb3_query semantic_query_node.py --ros-args \
+    --params-file $HOME/ws/install/tb3_query/share/tb3_query/config/semantic_query.yaml \
+    -p use_sim_time:=true \
+    -p semantic_targets_file:=$HOME/ws/install/tb3_frontier_exploration/share/tb3_frontier_exploration/config/semantic_targets_la.yaml
+
+# 5b 目标适配：landmark 位置 → 接近点位姿 → Nav2 goal
+ros2 run tb3_nav_adapter nav_goal_adapter_node --ros-args \
+    --params-file $HOME/ws/install/tb3_nav_adapter/share/tb3_nav_adapter/config/nav_goal_adapter.yaml \
+    -p use_sim_time:=true
+
+# 5c 协调器状态机：EXPLORING / SEARCHING / SEMANTIC_NAV / TARGET_REACHED / IDLE；订阅 /user_command
+ros2 run tb3_coordinator coordinator_node --ros-args \
+    --params-file $HOME/ws/install/tb3_coordinator/share/tb3_coordinator/config/coordinator.yaml \
+    -p use_sim_time:=true
+```
+
+核对：`ros2 topic echo /coordinator_node/status` 出现 `EXPLORING`；`ros2 node list` 现在应有 ~20 个节点。
+
+### 4.6 终端 6 — RViz（带默认配置文件）
+
+```bash
+rviz2 -d $HOME/ws/install/tb3_coordinator/share/tb3_coordinator/rviz/la_demo.rviz --ros-args -p use_sim_time:=true
+```
+
+`-d <file.rviz>` 就是"打开时自动加载这套显示配置"，不用逐个 Add topic。两套配置：
+- `la_demo.rviz`：录屏布局——地图 + landmark 标记 + 机器人 + Nav2 路径 + 浮动的 detector debug 图，侧栏全隐藏；
+- `semantic_nav.rviz`：全套调试面板（Displays / Views 都在）。
+自己改好布局后 `File → Save Config As`（Ctrl+S 会直接覆盖打开的那份；install 里的是 symlink，实际写回 `src/tb3_coordinator/rviz/`）。
+`-p use_sim_time:=true` 让 RViz 用 /clock，否则 TF 时间对不上会一片报错。
+
+### 4.7 顺序与时序
+
+上面的编号就是顺序：Gazebo（等 /scan 有数据）→ Nav2（等 `/navigate_to_pose` 出现）→ 感知链 →
+探索 → 查询/适配/协调 → RViz。官方 launch 版是同一套东西加了 10/15/17/20/23 s 的定时器；
+手动起的话每层看到核对项再起下一层就行。全部起完后回 §5 观察、§6 发命令。
+
+### 4.8 一条命令起全栈（可选，等价于 4.1–4.6）
+
+```bash
 ros2 launch tb3_coordinator full_semantic_nav_la.launch.py x_pose:=1.0 y_pose:=-1.0
 ```
 
-起点 (1, −1) 是 R07 起的默认预设（§9 规则：离任何障碍 ≥1.2 m）。
-R07 最终配置 = 这条命令的默认值：Nav2 用 Humble 原版 `nav2_bringup/params/nav2_params.yaml`，
-起步旋转扫描 0.4 rad/s，memory 层按观测 stamp 查 TF（`tf_stamped_lookup: true`、
-`tf_stamp_timeout: 0.0`）、semantic_memory `position_smoothing_alpha: 1.0`、map memory 晋升防护
-`min_distinct_observations: 3`（§7.4）。可选慢转版：加
-`nav2_params:=/home/ubuntu/ws/install/tb3_coordinator/share/tb3_coordinator/config/nav2_params_la_slow.yaml warmup_angular_speed:=0.3`。
-
-日志不用 `tee`：ROS 2 的 launch 已经把所有节点输出写到
-`~/.ros/log/<时间戳目录>/launch.log`（`ls -t ~/.ros/log | head -1` 找最新）。要留档就 `cp` 那个文件到
-`~/ws/reports/demo/stack_<名字>.log`（宿主机路径 `reports/demo/`，bind mount）。
-想同时在屏幕上看又留档再用 `... 2>&1 | tee ~/ws/reports/demo/stack.log`（可选）。
-
-启动就绪判据（~25–40 s）：
-```
-[la_detector_node]: la_detector_node ready. server=http://127.0.0.1:8801 vocabulary=[...]
-[bt_navigator]: Begin navigating ...        ← Nav2 活了、探索开始（或 [action] Goal accepted）
-[la_detector_node]: [la_stats] ... errors=0 ...   ← 每 10 s 一条，errors=0 = grounding 链路健康
-```
-另两条健康判据：localizer `[scan_match] ... fallback-to-latest 0`、map memory `[tf_match] ... fallback-to-latest 0`。
+参数：`nav2_params:=`、`warmup_angular_speed:=`、`detector_config:=`、`rviz_config:=`、`world:=`。
 
 ## 5. 终端 C — 观察（ros2 自省命令）
 
@@ -477,23 +595,40 @@ R06a 冒烟起点 (-1.5, 0) 离 barrier 1.05 m，前 100 s goal_assignment 一�
     2.6–3.0 m 出现（12 帧全被 2.5 m 范围闸挡掉）。修法（备选清单，未做）：巡逻一旦开始就把
     complete 标志锁住跑完 4 轮，或 complete 翻回 False 时恢复探索。
 
-## 11. 关栈
+## 11. 关栈与释放 GPU 显存
 
-1. 终端 B：`Ctrl+C`，等 launch 各进程退出（~10 s）。若下次起栈报 gzserver 端口占用，
-   在容器里清残留（注意坑 7，用 PID 不用 pkill -f）：
+1. 每个节点终端 `Ctrl+C`（用官方 launch 起的话一个 Ctrl+C 全关，等 ~10 s）。
+   下次起 gzserver 报端口占用 = 有残留进程，在容器里清（坑 7：先 `ps` 列 PID，再按 PID 杀，
+   不要 `pkill -f "长模式"`）：
 
    ```bash
-   ps aux | grep -E "gzserver|gzclient|rviz|ros2|nav2|component" | grep -v grep
-   kill -9 <上面列出的 PID...>
+   ps aux | grep -E "gzserver|gzclient|rviz|ros2|nav2|component|slam" | grep -v grep
+   kill -9 <PID ...>
    ```
 
-2. 录完当天不再跑：停容器释放显存（grounding 驻留 ~10 GiB VRAM）。
-   **只 stop，不 down、不删卷**：
+2. **GPU 显存谁在占、怎么放**：
+
+   ```bash
+   nvidia-smi                                                   # 宿主机看总量；Processes 表列出每个进程
+   nvidia-smi --query-compute-apps=pid,used_memory,process_name --format=csv
+   ```
+
+   两类占用：
+   - **grounding 容器里的 `python3 server.py`（LocateAnything-3B，~10 GiB）**：模型常驻显存，只要容器在跑就不释放。
+     放掉 = 停容器：`docker compose -f docker/compose.yaml -f docker/compose.local.yaml stop grounding`
+     （或 `docker stop docker-grounding-1`）。下次 `... start grounding`，冷启动重新加载权重 ~76 s。
+   - **sim 容器里的 gzserver / gzclient / rviz2（各几百 MiB，走 EGL/GLX）**：进程退出就释放，Ctrl+C 即可。
+
+   全停（当天不再跑）：
 
    ```bash
    cd ~/Desktop/Github_Project/TurtleBot3-semantic-navigation
-   docker compose -f docker/compose.yaml -f docker/compose.local.yaml stop
+   docker compose -f docker/compose.yaml -f docker/compose.local.yaml stop     # 只 stop：容器和卷都保留
+   nvidia-smi                                                                 # 确认显存回到 ~0
    ```
+
+   **不要 `down -v`**：`docker_hf_cache` 卷里是 LocateAnything-3B 权重；`down`（不带 -v）会删容器但留卷，
+   下次要 `up -d` 重建容器（多等一次冷启动），所以日常用 `stop`/`start` 就够。
 
 3. 下次继续：`docker compose ... start` → 回 §3 等 /health。
 
