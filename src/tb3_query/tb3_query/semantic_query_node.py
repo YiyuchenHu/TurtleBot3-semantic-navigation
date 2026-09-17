@@ -42,6 +42,7 @@ from ament_index_python.packages import get_package_share_directory
 from tb3_query.query_core import (
     MemoryObject,
     attribute_expression,
+    canonicalize_expression,
     extract_expression,
     load_target_mapping,
     parse_command,
@@ -73,6 +74,10 @@ class SemanticQueryNode(Node):
         self.declare_parameter("status_topic", "~/query_status")
         self.declare_parameter("semantic_targets_file", "")
         self.declare_parameter("output_frame", "base_link")
+        # Attribute resolution (R07): an expression that is not any
+        # landmark's class still resolves when a landmark carries it as an
+        # attribute with at least this many distinct detections.
+        self.declare_parameter("attribute_min_count", 2)
 
         mem_topic    = self.get_parameter("memory_topic").value
         cmd_topic    = self.get_parameter("command_topic").value
@@ -134,6 +139,10 @@ class SemanticQueryNode(Node):
                 x=det.bbox.center.position.x,
                 y=det.bbox.center.position.y,
                 confidence=det.results[0].hypothesis.score,
+                # results[1:] = attribute evidence attached by the map
+                # memory (label -> distinct detections)
+                attributes={r.hypothesis.class_id: float(r.hypothesis.score)
+                            for r in det.results[1:]},
             ))
         self._memory_objects = objs
 
@@ -158,6 +167,12 @@ class SemanticQueryNode(Node):
                     f"(known: {sorted(self._known_targets)})"
                 )
                 return
+            canon = canonicalize_expression(expression)
+            if canon != expression:
+                self.get_logger().info(
+                    "expression '%s' → '%s' (wording the detector grounds)"
+                    % (expression, canon))
+                expression = canon
             semantic_name = expression
             detector_label = expression
             desired_index = None
@@ -183,6 +198,12 @@ class SemanticQueryNode(Node):
             attr_expr = attribute_expression(raw, semantic_name,
                                              detector_label)
             if attr_expr is not None and desired_index is None:
+                canon = canonicalize_expression(attr_expr)
+                if canon != attr_expr:
+                    self.get_logger().info(
+                        "expression '%s' → '%s' (wording the detector grounds)"
+                        % (attr_expr, canon))
+                    attr_expr = canon
                 semantic_name = attr_expr
                 detector_label = attr_expr
                 self.get_logger().info(
@@ -200,6 +221,7 @@ class SemanticQueryNode(Node):
             detector_label,
             raw,
             desired_index=desired_index,
+            attribute_min_count=int(self.get_parameter("attribute_min_count").value),
         )
 
         # ── Search suggestion (Phase 2c) ─────────────────────────────────

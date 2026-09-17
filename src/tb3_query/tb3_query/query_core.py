@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import math
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
@@ -25,12 +25,19 @@ import yaml
 
 @dataclass
 class MemoryObject:
-    """Lightweight mirror of one Detection3D from the memory topic."""
+    """Lightweight mirror of one Detection3D from the memory topic.
+
+    `attributes`: extra hypotheses the map memory attaches to a landmark
+    (R07 attribute-on-identity): label -> number of distinct detections
+    of that label seen on this object, e.g. {"person wearing a green
+    shirt": 5.0} on `person_2`.
+    """
     object_id: str
     detector_label: str
     x: float
     y: float
     confidence: float
+    attributes: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -156,6 +163,33 @@ def extract_expression(text: str) -> Optional[str]:
         j -= 1
     expression = " ".join(tokens[i:j])
     return expression or None
+
+
+# Wording the detector is known to ground (R05 probe): "person wearing a
+# <colour> shirt". Users type the same idea many ways ("person ware green
+# T-shirt", "person in a red top"); the model grounds NONE of those (0
+# boxes in 138 s on 2026-09-17 for "person ware green t shirt"), so the
+# expression is rewritten to the validated form before it becomes the
+# vocabulary word and the landmark class.
+_SHIRT_RE = re.compile(
+    r"^(?:a |an |the )?person (?:ware|wear|wears|wearing|in|with|has|having|who wears|who is wearing) "
+    r"(?:a |an |the )?(?P<colour>red|green|blue|white|yellow|black|orange|grey|gray) "
+    r"(?:t shirt|tshirt|shirt|top|tee|clothes|clothing|jersey)$")
+
+
+def canonicalize_expression(expr: str) -> str:
+    """Rewrite known paraphrases to the wording the detector grounds.
+
+        "person ware green t shirt"   -> "person wearing a green shirt"
+        "person in a red top"         -> "person wearing a red shirt"
+        "person wearing a blue shirt" -> unchanged
+        "blue chair"                  -> unchanged
+    """
+    norm = _normalize(expr)
+    m = _SHIRT_RE.match(norm)
+    if m:
+        return "person wearing a %s shirt" % m.group("colour")
+    return expr
 
 
 def attribute_expression(
@@ -307,12 +341,32 @@ def parse_command(
 
 # ── Target selection ──────────────────────────────────────────────────────
 
+def select_by_attribute(
+    objects: list[MemoryObject],
+    label: str,
+    min_count: int,
+) -> Optional[MemoryObject]:
+    """The object carrying the most evidence for attribute `label`.
+
+    Ties go to the nearest object. None when no object has at least
+    `min_count` distinct detections of the label. This is how "person
+    wearing a green shirt" resolves to `person_2` once the map memory has
+    attached the expression to that person's identity (R07): the person
+    landmark is the object, the expression is evidence on it.
+    """
+    hits = [o for o in objects if o.attributes.get(label, 0) >= min_count]
+    if not hits:
+        return None
+    return max(hits, key=lambda o: (o.attributes[label], -math.hypot(o.x, o.y)))
+
+
 def select_target(
     objects: list[MemoryObject],
     semantic_name: str,
     detector_label: str,
     query_text: str,
     desired_index: Optional[int] = None,
+    attribute_min_count: int = 2,
 ) -> QueryResult:
     """Select the best memory object matching the given detector_label.
 
@@ -333,6 +387,27 @@ def select_target(
       intuition "go to the person" → the closest one.
     """
     candidates = [o for o in objects if o.detector_label == detector_label]
+
+    if not candidates and desired_index is None:
+        # No landmark carries the label as its class: maybe one carries
+        # it as an attribute (expression evidence on a family landmark).
+        by_attr = select_by_attribute(objects, detector_label, attribute_min_count)
+        if by_attr is not None:
+            return QueryResult(
+                success=True,
+                query_text=query_text,
+                semantic_name=semantic_name,
+                detector_label=detector_label,
+                object_id=by_attr.object_id,
+                x=by_attr.x,
+                y=by_attr.y,
+                confidence=by_attr.attributes[detector_label],
+                status_message=(
+                    f"matched {by_attr.object_id} by attribute '{detector_label}' "
+                    f"({by_attr.attributes[detector_label]:.0f} detections, "
+                    f"d={math.hypot(by_attr.x, by_attr.y):.2f}m)"
+                ),
+            )
 
     if not candidates:
         return QueryResult(

@@ -90,7 +90,17 @@ def _marker_label(lm) -> str:
     text = "%s_%s" % (cls.replace(" ", "_"), seq)
     if attr:
         text += "[%s]" % attr.replace(" ", "_")
-    return "%s\nn%d" % (text, lm.observation_count)
+    text += "\nn%d" % lm.observation_count
+    top = lm.top_attribute()
+    if top is not None:
+        a, k = top
+        # "person wearing a green shirt" -> "green_shirt:5"
+        for sep in (" wearing a ", " wearing "):
+            if sep in a:
+                a = a.split(sep, 1)[1]
+                break
+        text += "\n%s:%d" % (a.replace(" ", "_"), k)
+    return text
 
 
 @dataclass
@@ -109,6 +119,31 @@ class Landmark:
     # `trash_can_1` landmark sitting on the chair). Keeping the counts turns
     # that same disagreement into the evidence for a relabel.
     class_counts: dict = field(default_factory=dict)
+    # Attribute evidence (R07 attribute-on-identity): a same-family,
+    # more specific label seen on this landmark ("person wearing a green
+    # shirt" on a `person`), keyed by the distinct detections behind it
+    # ((memory object id, observation stamp) pairs, as for the promotion
+    # guard). The landmark IS the object's identity; the expression is
+    # evidence attached to it, never a second landmark on the same spot.
+    attr_keys: dict = field(default_factory=dict)
+
+    def attr_count(self, label):
+        return len(self.attr_keys.get(label, ()))
+
+    def attrs_summary(self):
+        """'person wearing a green shirt:5' - strongest first, '-' if none."""
+        if not self.attr_keys:
+            return "-"
+        return ",".join(
+            "%s:%d" % (lb, len(ks))
+            for lb, ks in sorted(self.attr_keys.items(), key=lambda kv: (-len(kv[1]), kv[0])))
+
+    def top_attribute(self):
+        """(label, count) of the strongest attribute, or None."""
+        if not self.attr_keys:
+            return None
+        lb, ks = max(self.attr_keys.items(), key=lambda kv: (len(kv[1]), kv[0]))
+        return lb, len(ks)
 
     @property
     def observation_count(self):
@@ -500,7 +535,7 @@ class SemanticMapMemoryNode(Node):
     # the last six are the success paths.
     GATE_ROWS = ("range", "tf", "out_of_grid", "no_island", "geometry", "mutex",
                  "held_distinct")
-    PASS_ROWS = ("merge_landmark", "cross_evidence", "relabel",
+    PASS_ROWS = ("merge_landmark", "cross_evidence", "relabel", "attribute",
                  "merge_candidate", "new_candidate", "promote")
     STAT_ROWS = GATE_ROWS + PASS_ROWS
 
@@ -534,6 +569,14 @@ class SemanticMapMemoryNode(Node):
         # class, searched ones included (their threshold stays
         # search_min_observations). See promotion_ready().
         self.declare_parameter("min_distinct_observations", 3)
+        # Attribute-on-identity (R07): a more specific same-family label
+        # ("person wearing a green shirt") observed within this distance
+        # of an existing base-class landmark (`person`) is recorded as
+        # attribute evidence on that landmark instead of growing its own
+        # candidate. Queries and the search FOUND check resolve the
+        # expression through these attributes (semantic_query_node
+        # attribute_min_count, coordinator search_attribute_min_count).
+        self.declare_parameter("attribute_merge_distance_m", 1.5)
         self.declare_parameter("search_radius_cells", 15)
         self.declare_parameter("sphere_radius", 0.18)
         self.declare_parameter("text_offset_z", 0.45)
@@ -652,6 +695,8 @@ class SemanticMapMemoryNode(Node):
         self._min_obs   = self.get_parameter("min_observations").value
         self._min_distinct = int(
             self.get_parameter("min_distinct_observations").value)
+        self._attr_d = float(
+            self.get_parameter("attribute_merge_distance_m").value)
         # Observations that carry no stamp cannot be told apart, so each
         # one gets its own key and the guard degrades to a no-op for them.
         self._unstamped_seq = 0
@@ -958,6 +1003,22 @@ class SemanticMapMemoryNode(Node):
                 self._record_cross_evidence(other_lm, label, rx, ry, now)
                 continue
 
+            family_lm = self._find_family_landmark(label, rx, ry)
+            if family_lm is not None:
+                keys = family_lm.attr_keys.setdefault(label, set())
+                new = obs_key not in keys
+                keys.add(obs_key)
+                family_lm.last_seen = now
+                d_f = math.hypot(family_lm.x - rx, family_lm.y - ry)
+                self._note("attribute", label,
+                           "%s k=%d d=%.2f id=%s"
+                           % (family_lm.landmark_id, len(keys), d_f, obs_id))
+                if new:
+                    self.get_logger().info(
+                        "[attribute] %s += '%s' (k=%d, d=%.2f)"
+                        % (family_lm.landmark_id, label, len(keys), d_f))
+                continue
+
             matched_cand = self._find_candidate(label, rx, ry)
             if matched_cand is not None:
                 d_c = math.hypot(matched_cand.x - rx, matched_cand.y - ry)
@@ -1131,6 +1192,33 @@ class SemanticMapMemoryNode(Node):
                 continue
             d = math.hypot(lm.x - x, lm.y - y)
             if d < self._evidence_d and d < best_d:
+                best = lm
+                best_d = d
+        return best
+
+    def _find_family_landmark(self, label, x, y):
+        """Nearest landmark whose class is a STRICT token-subset of `label`
+        (the base class of an attribute expression: `person` for "person
+        wearing a green shirt") within attribute_merge_distance_m.
+
+        Measured need (R07, 2026-09-17): with the same-family exemption in
+        `_find_landmark_other_class` the expression grew its own candidate
+        next to the person it describes — take 2 ended with `person_2`
+        n=44 and `person wearing a green shirt_0` n=14 on one spot, and an
+        earlier search promoted the expression on the WRONG (white-shirt)
+        person because it happened to collect 3 boxes there first. With
+        the base landmark as the identity, the expression becomes
+        evidence on it and the query picks the person with the most.
+        """
+        toks = set(str(label).split())
+        best = None
+        best_d = float("inf")
+        for lm in self._landmarks.values():
+            lt = set(str(lm.semantic_class).split())
+            if not (lt < toks):
+                continue
+            d = math.hypot(lm.x - x, lm.y - y)
+            if d < self._attr_d and d < best_d:
                 best = lm
                 best_d = d
         return best
@@ -1370,9 +1458,10 @@ class SemanticMapMemoryNode(Node):
                 for c in self._candidates))
         if self._landmarks:
             lines.append("  landmarks: " + " | ".join(
-                "%s n=%d (%.2f,%.2f) counts=[%s]"
+                "%s n=%d (%.2f,%.2f) counts=[%s]%s"
                 % (lm.landmark_id, lm.observation_count, lm.x, lm.y,
-                   lm.counts_summary())
+                   lm.counts_summary(),
+                   "" if not lm.attr_keys else " attrs=[%s]" % lm.attrs_summary())
                 for lm in self._landmarks.values()))
         return "\n".join(lines)
 
@@ -1479,6 +1568,13 @@ class SemanticMapMemoryNode(Node):
             hyp.hypothesis.class_id = lm.semantic_class
             hyp.hypothesis.score = float(lm.observation_count)
             det.results.append(hyp)
+            # results[1:] = attribute evidence (label, distinct detections);
+            # consumers that only read results[0] are unaffected.
+            for lb, ks in sorted(lm.attr_keys.items(), key=lambda kv: -len(kv[1])):
+                ah = ObjectHypothesisWithPose()
+                ah.hypothesis.class_id = lb
+                ah.hypothesis.score = float(len(ks))
+                det.results.append(ah)
             msg.detections.append(det)
         self._lm_obj_pub.publish(msg)
 

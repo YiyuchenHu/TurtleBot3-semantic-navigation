@@ -388,6 +388,24 @@ launch 时给 coordinator 传 `hold_after_goal:=false`（参数在
 world 里的三个彩衣 person（绿=中心、蓝=NE、红=SE）由
 `scripts/make_person_variants.py` 生成（生成物 gitignore，重建镜像后重跑一次即可）。
 
+
+**R07 属性挂到身份上（attribute-on-identity）**：以前 `person wearing a green shirt` 的观测在 map memory 里
+自己长候选（与 `person_N` 并存、或先在错的人身上凑够 3 帧就晋升——2026-09-17 实测 FOUND 在白衣人上）。现在：
+- `semantic_map_memory_node`：表达式观测落在 `attribute_merge_distance_m`（1.5 m）内的基类 landmark（`person`）上时，
+  记为该 landmark 的属性证据（按不同检测计数，同晋升防护的 k），不再另起候选；日志 `[attribute] person_2 += '…' (k=2)`，
+  gate 行 `attribute`，`landmark_objects` 的 `results[1:]` 带 `(表达式, k)`，RViz 标签第三行 `green_shirt:2`。
+  没有基类 landmark 时行为不变（自己长候选，搜索照旧）。
+- `semantic_query_node`：表达式没有同名 landmark 时，按属性解析——取 k ≥ `attribute_min_count`（2）里最大的那个
+  （并列取最近），日志 `Query OK: … → person_2 … by attribute`。
+- `coordinator_node`：搜索期间 landmark 的属性 k ≥ `search_attribute_min_count`（2）也算 FOUND（`via attribute`）。
+- 措辞归一化（`query_core.canonicalize_expression`）：`person ware green t shirt` / `person in a red top` /
+  `person with blue tshirt` → `person wearing a <colour> shirt`（模型只 ground 这个说法；今天 `ware … t shirt` 138 s 0 框）。
+- 未做（备选）：coverage 里的衣色框现在只用于 veto、不发布，所以属性只在搜索期间累积；要"全程从远处累积"得把
+  coverage 框也发布成属性观测（R05 见过蓝衣标签框到红衣人，有误标风险）。
+
+**HUD**（`coordinator_node` `hud_*` 参数，`~/hud_markers`，la_demo/semantic_nav.rviz 已加显示）：地图上方
+y≈4.3 m 的黑条两行 `cmd:_…` / `state:_…`（空格画成下划线，rviz 空格 bug），状态切换时和每秒各发一次。
+
 ### 7.3 R05 的 world 与感知链新增
 
 * **jersey barrier**（西墙，4.07 m 长）：镜像构建期烤入（docker/Dockerfile.sim 末层），

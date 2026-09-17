@@ -69,6 +69,11 @@ ros2 topic pub -1 -w 1 /user_command std_msgs/msg/String "{data: 'go to the traf
 ros2 topic pub -1 -w 1 /user_command std_msgs/msg/String "{data: 'find a bicycle'}"      # 会 NOT FOUND
 ```
 
+能识别的词：`person` / `bookshelf`(`shelf`) / `trash can` / `cone`(`traffic cone`) / `barrier`(`traffic barrier`) 五类直接对应
+memory；`person wearing a <red|green|blue|white> shirt` 走属性（`ware`/`in a`/`T-shirt`/`top` 这些写法会自动改写成这句）；
+其它任何名词（`bicycle`、`blue chair`）原样注入检测词表去找。前面要有动词（`go to` / `find` / `navigate to` …）。
+RViz 地图上方的黑条是 HUD：`cmd:` 最近一条命令，`state:` 当前状态（搜索中带秒数、导航中带目标 id）。
+
 `-1` 发一条退出，`-w 1` 等订阅者出现再发（不加会丢首条）。不要连发两次（第二条算抢占）。
 memory 里已有 → 日志 `Query OK: … → bookshelf_0 at (x, y)` 直达；没有 → `[search] … injected, exploration enabled`：
 这时探索才开始（起步先 ±45° 扫一下，然后建图找目标），到达/找不到后回 IDLE 原地等下一条。

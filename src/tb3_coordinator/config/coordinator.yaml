@@ -62,6 +62,24 @@ coordinator_node:
     # Preemption safety net: dispatch the queued command even if the
     # cancelled goal's terminal result never arrives.
     preempt_watchdog_sec:       5.0
+    # ── Attribute-on-identity (R07) ────────────────────────────
+    # A search also succeeds when a landmark carries the searched
+    # expression as an ATTRIBUTE (extra hypothesis from the map memory,
+    # e.g. "person wearing a green shirt" on person_2) with at least this
+    # many distinct detections. semantic_query_node then resolves the
+    # expression to that landmark (attribute_min_count there).
+    search_attribute_min_count: 2
+    # ── HUD in RViz (R07) ──────────────────────────────────────
+    # Two text lines ("cmd: ...", "state: ...") on a dark slab, published
+    # on ~/hud_markers (latched, 1 Hz) at a fixed map position: the empty
+    # band above the 6x6 m room in la_demo.rviz (TopDownOrtho, centre
+    # (1.5, 0), 55 px/m -> y visible to +-4.9). Spaces are drawn as '_'
+    # (rviz2 renders a space as a wide gap).
+    hud_enabled:                true
+    hud_x:                      1.5
+    hud_y:                      4.3
+    hud_text_height:            0.3
+    hud_frame:                  "map"
 
     # ── Perception sweep (disabled by default) ─────────────────
     # The 360° in-place sweep was originally meant to "kick-start" SLAM by
@@ -152,6 +170,14 @@ semantic_map_memory_node:
     # class including the active search expression (search threshold 3
     # stays; it now means 3 distinct frames instead of 3 republishes).
     min_distinct_observations: 3
+    # Attribute-on-identity (R07): a more specific same-family label
+    # ("person wearing a green shirt") observed within this distance of an
+    # existing base-class landmark (`person`) becomes attribute evidence
+    # on that landmark (published as extra hypotheses on
+    # landmark_objects) instead of growing a second landmark on the same
+    # spot. Measured 2026-09-17: the expression used to promote on the
+    # WRONG person (white shirt) or sit as a duplicate next to person_2.
+    attribute_merge_distance_m: 1.5
 
     # ── Obstacle island search ─────────────────────────────
     # Search window radius in grid cells around the observation.

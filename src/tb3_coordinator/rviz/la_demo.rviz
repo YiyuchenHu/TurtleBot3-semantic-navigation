@@ -153,6 +153,18 @@ Visualization Manager:
         Reliability Policy: Reliable
         Value: /frontiers_markers
       Value: true
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: true
+      Name: HUD
+      Namespaces:
+        {}
+      Topic:
+        Depth: 5
+        Durability Policy: Transient Local
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /coordinator_node/hud_markers
+      Value: true
     - Class: rviz_default_plugins/Image
       Enabled: true
       Max Value: 1

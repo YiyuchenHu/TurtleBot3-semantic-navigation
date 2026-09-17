@@ -74,6 +74,8 @@ from geometry_msgs.msg import Twist
 from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import Odometry
 from vision_msgs.msg import Detection3DArray
+from visualization_msgs.msg import Marker, MarkerArray
+from std_msgs.msg import ColorRGBA
 from nav2_msgs.action import NavigateToPose
 
 try:
@@ -168,6 +170,20 @@ class CoordinatorNode(Node):
         # result callback never arrives, dispatch the queued command
         # anyway after this long.
         self.declare_parameter("preempt_watchdog_sec", 5.0)
+        # Search FOUND through attribute evidence (R07): a landmark whose
+        # extra hypotheses carry the searched expression with at least
+        # this many distinct detections counts as found (the map memory
+        # attaches "person wearing a green shirt" to the `person`
+        # landmark it was seen on instead of promoting a second one).
+        self.declare_parameter("search_attribute_min_count", 2)
+        # HUD (R07): last command + current state drawn in RViz as two
+        # text lines on a dark slab at a fixed map position — the empty
+        # band above the room in la_demo.rviz (TopDownOrtho, 55 px/m).
+        self.declare_parameter("hud_enabled", True)
+        self.declare_parameter("hud_x", 1.5)
+        self.declare_parameter("hud_y", 4.3)
+        self.declare_parameter("hud_text_height", 0.3)
+        self.declare_parameter("hud_frame", "map")
 
         user_cmd_topic   = self.get_parameter("user_command_topic").value
         expl_en_topic    = self.get_parameter("exploration_enabled_topic").value
@@ -210,6 +226,11 @@ class CoordinatorNode(Node):
         self._search_label = None       # injected expression, or None
         self._search_query = None       # original user command to re-forward
         self._search_t0 = None          # rclpy Time at search start
+        self._attr_min = int(self.get_parameter("search_attribute_min_count").value)
+        # HUD state
+        self._hud_cmd = ""
+        self._hud_target = ""
+        self._hud_note = ""
         self._search_dist = 0.0         # odometry mileage during SEARCHING
         self._search_check_timer = None
         self._expl_complete = False     # latest latched /exploration_complete
@@ -251,6 +272,7 @@ class CoordinatorNode(Node):
         # time shows the current state at once instead of waiting for the
         # next transition (status is only published on changes).
         self._status_pub = self.create_publisher(String, status_topic, latched_qos)
+        self._hud_pub = self.create_publisher(MarkerArray, "~/hud_markers", latched_qos)
         self._cmd_vel_pub = self.create_publisher(Twist, "/cmd_vel", reliable_qos)
         self._active_search_pub = self.create_publisher(
             String, self.get_parameter("active_search_topic").value, latched_qos)
@@ -294,6 +316,8 @@ class CoordinatorNode(Node):
             else " — standing still, waiting for /user_command"))
 
         self.create_timer(5.0, self._check_sweep_trigger)
+        if bool(self.get_parameter("hud_enabled").value):
+            self.create_timer(1.0, self._publish_hud)
         self.get_logger().info(
             "CoordinatorNode ready — mode=%s  nav_action=%s"
             % (self._mode.name, nav_action_name))
@@ -305,6 +329,77 @@ class CoordinatorNode(Node):
         self._mode = mode
         self._publish_status("%s → %s" % (old.name, mode.name))
         self.get_logger().info("[mode] %s → %s" % (old.name, mode.name))
+        self._publish_hud()
+
+    # ── HUD ───────────────────────────────────────────────────────────────
+
+    def _hud_lines(self):
+        m = self._mode
+        state = m.name
+        if m == Mode.SEARCHING and self._search_label:
+            el = (self.get_clock().now() - self._search_t0).nanoseconds / 1e9 \
+                if self._search_t0 is not None else 0.0
+            state += " %s %.0fs" % (self._search_label, el)
+        elif m in (Mode.SEMANTIC_NAV, Mode.TARGET_REACHED) and self._hud_target:
+            state += " -> %s" % self._hud_target
+        elif m == Mode.TARGET_FAILED and self._hud_note:
+            state += " %s" % self._hud_note
+        elif m == Mode.IDLE:
+            state += " (%s) waiting for command" % self._hud_note if self._hud_note \
+                else " waiting for command"
+        return "cmd: %s" % (self._hud_cmd or "-"), "state: %s" % state
+
+    def _publish_hud(self) -> None:
+        if not bool(self.get_parameter("hud_enabled").value):
+            return
+        # rviz2 TEXT_VIEW_FACING renders a space as a multi-character
+        # gap, so spaces become underscores (same rule as the landmark
+        # labels).
+        lines = [ln.replace(" ", "_") for ln in self._hud_lines()]
+        h = float(self.get_parameter("hud_text_height").value)
+        x = float(self.get_parameter("hud_x").value)
+        y = float(self.get_parameter("hud_y").value)
+        frame = str(self.get_parameter("hud_frame").value)
+        stamp = self.get_clock().now().to_msg()
+        ma = MarkerArray()
+        clear = Marker()
+        clear.header.frame_id = frame
+        clear.header.stamp = stamp
+        clear.action = Marker.DELETEALL
+        ma.markers.append(clear)
+        text = "\n".join(lines)
+        bg = Marker()
+        bg.header.frame_id = frame
+        bg.header.stamp = stamp
+        bg.ns = "hud_bg"
+        bg.id = 0
+        bg.type = Marker.CUBE
+        bg.action = Marker.ADD
+        bg.pose.position.x = x
+        bg.pose.position.y = y
+        bg.pose.position.z = 0.4
+        bg.pose.orientation.w = 1.0
+        bg.scale.x = 0.62 * h * max(len(ln) for ln in lines) + 0.6 * h
+        bg.scale.y = (1.15 * len(lines) + 0.3) * h
+        bg.scale.z = 0.01
+        bg.color = ColorRGBA(r=0.0, g=0.0, b=0.0, a=0.7)
+        ma.markers.append(bg)
+        t = Marker()
+        t.header.frame_id = frame
+        t.header.stamp = stamp
+        t.ns = "hud_text"
+        t.id = 1
+        t.type = Marker.TEXT_VIEW_FACING
+        t.action = Marker.ADD
+        t.pose.position.x = x
+        t.pose.position.y = y
+        t.pose.position.z = 0.45
+        t.pose.orientation.w = 1.0
+        t.scale.z = h
+        t.color = ColorRGBA(r=1.0, g=1.0, b=1.0, a=1.0)
+        t.text = text
+        ma.markers.append(t)
+        self._hud_pub.publish(ma)
 
     def _set_exploration(self, enabled: bool) -> None:
         msg = Bool()
@@ -336,6 +431,10 @@ class CoordinatorNode(Node):
             return
 
         self.get_logger().info("User command: '%s'" % cmd)
+        self._hud_cmd = cmd
+        self._hud_target = ""
+        self._hud_note = ""
+        self._publish_hud()
 
         if self._resume_timer is not None:
             self._resume_timer.cancel()
@@ -398,6 +497,7 @@ class CoordinatorNode(Node):
             return
 
         if msg.success:
+            self._hud_target = msg.object_id
             self._set_mode(Mode.SEMANTIC_NAV)
             self._publish_status(
                 "target selected: %s (%s) at (%.2f, %.2f) — waiting for goal pose"
@@ -408,6 +508,7 @@ class CoordinatorNode(Node):
             self._begin_search(msg.search_label, msg.query_text)
         else:
             self.get_logger().warn("Query failed: %s" % msg.status_message)
+            self._hud_note = "query failed"
             self._set_mode(Mode.TARGET_FAILED)
             self._publish_status("query failed: %s" % msg.status_message)
             self._schedule_resume()
@@ -585,6 +686,7 @@ class CoordinatorNode(Node):
             "[search] TARGET NOT FOUND: '%s' — exploration complete, no "
             "landmark promoted (searched %.1fs, %.2fm)"
             % (label, elapsed, mileage))
+        self._hud_note = "NOT FOUND %s" % label
         self._set_mode(Mode.TARGET_FAILED)
         self._publish_status(
             "TARGET NOT FOUND: '%s' — exploration complete, nothing promoted"
@@ -595,18 +697,30 @@ class CoordinatorNode(Node):
         if self._mode != Mode.SEARCHING or self._search_label is None:
             return
         hit = None
+        via = ""
         for det in msg.detections:
-            if det.results and \
-                    det.results[0].hypothesis.class_id == self._search_label:
+            if not det.results:
+                continue
+            if det.results[0].hypothesis.class_id == self._search_label:
                 hit = det
+                break
+            # Attribute evidence on a family landmark (results[1:]):
+            # "person wearing a green shirt" attached to person_2.
+            for r in det.results[1:]:
+                if r.hypothesis.class_id == self._search_label \
+                        and r.hypothesis.score >= self._attr_min:
+                    hit = det
+                    via = " via attribute (%.0f detections)" % r.hypothesis.score
+                    break
+            if hit is not None:
                 break
         if hit is None:
             return
         elapsed = (self.get_clock().now() - self._search_t0).nanoseconds / 1e9
         self.get_logger().info(
-            "[search] FOUND '%s' → %s at (%.2f, %.2f) n=%.0f after %.1fs, "
+            "[search] FOUND '%s' → %s%s at (%.2f, %.2f) n=%.0f after %.1fs, "
             "%.2fm explored — pausing exploration, re-running query"
-            % (self._search_label, hit.id,
+            % (self._search_label, hit.id, via,
                hit.bbox.center.position.x, hit.bbox.center.position.y,
                hit.results[0].hypothesis.score, elapsed, self._search_dist))
         self._set_exploration(False)
@@ -705,6 +819,7 @@ class CoordinatorNode(Node):
             self.get_logger().warn(
                 "[nav2] Goal timed out after %.1fs, canceling" % self._nav_timeout)
             self._cancel_nav_goal()
+            self._hud_note = "nav timeout -> %s" % self._hud_target
             self._set_mode(Mode.TARGET_FAILED)
             self._publish_status("Nav2 goal timed out")
             self._schedule_resume()
@@ -753,10 +868,12 @@ class CoordinatorNode(Node):
             self._publish_status("Nav2 goal succeeded — target reached")
         elif status == STATUS_CANCELED:
             self.get_logger().warn("[nav2] Goal CANCELED")
+            self._hud_note = "nav canceled"
             self._set_mode(Mode.TARGET_FAILED)
             self._publish_status("Nav2 goal canceled")
         else:
             self.get_logger().warn("[nav2] Goal FAILED (status=%d)" % status)
+            self._hud_note = "nav failed -> %s" % self._hud_target
             self._set_mode(Mode.TARGET_FAILED)
             self._publish_status("Nav2 goal failed (status=%d)" % status)
 
@@ -826,6 +943,10 @@ class CoordinatorNode(Node):
             terminal = self._mode.name
             self._set_exploration(False)
             self._cmd_vel_pub.publish(Twist())
+            if terminal == "TARGET_REACHED" and self._hud_target:
+                self._hud_note = "reached %s" % self._hud_target
+            elif not self._hud_note:
+                self._hud_note = terminal
             self._set_mode(Mode.IDLE)
             self.get_logger().info(
                 "[hold] %s → IDLE — holding position, exploration stays off "
