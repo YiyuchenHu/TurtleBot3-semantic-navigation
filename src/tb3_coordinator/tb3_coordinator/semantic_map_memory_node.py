@@ -72,20 +72,25 @@ class Candidate:
 
 
 def _marker_label(lm) -> str:
-    """RViz text: "<class>_<id> [<attr>] n<count>" — an attribute
-    expression ("person wearing a green shirt_0") shows as
-    "person_0 [green shirt] n3"; plain classes as "trash can_0 n23".
-    Display only; landmark ids are unchanged."""
+    """RViz text, two lines: "<class>_<id>[<attr>]" / "n<count>".
+
+    No spaces anywhere: rviz2's TEXT_VIEW_FACING (Ogre MovableText)
+    renders a space as a gap several characters wide, so "traffic
+    cone_0 n11" came out as three islands. Multi-word classes and
+    attributes are joined with underscores; an attribute expression
+    ("person wearing a green shirt_0") shows as
+    "person_0[green_shirt]" over "n3". Display only; landmark ids are
+    unchanged."""
     seq = lm.landmark_id.rsplit("_", 1)[-1]
     cls, attr = lm.semantic_class, ""
     if " wearing a " in cls:
         cls, attr = cls.split(" wearing a ", 1)
     elif " wearing " in cls:
         cls, attr = cls.split(" wearing ", 1)
-    text = "%s_%s" % (cls, seq)
+    text = "%s_%s" % (cls.replace(" ", "_"), seq)
     if attr:
-        text += " [%s]" % attr
-    return "%s n%d" % (text, lm.observation_count)
+        text += "[%s]" % attr.replace(" ", "_")
+    return "%s\nn%d" % (text, lm.observation_count)
 
 
 @dataclass
@@ -1423,8 +1428,9 @@ class SemanticMapMemoryNode(Node):
                 b.pose.position.y = ly
                 b.pose.position.z = self._text_z - 0.05
                 b.pose.orientation.w = 1.0
-                b.scale.x = 0.62 * self._label_h * len(text) + 0.4 * self._label_h
-                b.scale.y = 1.35 * self._label_h
+                lines = text.split("\n")
+                b.scale.x = 0.62 * self._label_h * max(len(ln) for ln in lines) + 0.4 * self._label_h
+                b.scale.y = (1.15 * len(lines) + 0.2) * self._label_h
                 b.scale.z = 0.01
                 b.color = LABEL_BG_COLOR
                 ma.markers.append(b)
