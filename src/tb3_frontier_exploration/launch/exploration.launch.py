@@ -1,3 +1,18 @@
+"""
+exploration.launch.py — frontier exploration, 3 nodes (layer 4 of
+docs/la_runbook.md §4.4).
+
+    ros2 launch tb3_frontier_exploration exploration.launch.py
+    ros2 launch tb3_frontier_exploration exploration.launch.py warmup_angular_speed:=0.3
+
+Each Node is exactly one `ros2 run` line; start them by hand when testing
+one of them (params.yaml already carries map_topic / costmap_topic /
+odom_topic, the launch arguments below only override it):
+
+    ros2 run tb3_frontier_exploration startup_map_warmup_node.py --ros-args -p use_sim_time:=true -p scan_angular_speed:=0.4
+    ros2 run tb3_frontier_exploration frontier_detection_node    --ros-args --params-file <pkg>/config/params.yaml -p use_sim_time:=true
+    ros2 run tb3_frontier_exploration goal_assignment_node       --ros-args --params-file <pkg>/config/params.yaml -p use_sim_time:=true
+"""
 import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription

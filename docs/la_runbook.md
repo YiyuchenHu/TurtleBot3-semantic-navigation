@@ -9,7 +9,7 @@
 
 ## 1. 总览与架构
 
-一次完整演示 = 容器（docker，§3）+ 逐节点手动起栈（Gazebo 一条 launch、其余每个节点一个终端 `ros2 run`，§4）+ 观察（ros2 node/topic/param，§5）+ 发命令（ros2 topic pub，§6）。全部是 docker 与 ros2 原语，不依赖本仓库的脚本；本仓库的 launch 文件只在 §4.8 作为可选一键版，脚本只在 §12 作为可选封装列出。
+一次完整演示 = 容器（docker，§3）+ 分层起栈（六层：Gazebo / Nav2 / 感知链 / 探索 / 查询-协调 / RViz，每层一条 launch 或逐节点 `ros2 run`，§4）+ 观察（ros2 node/topic/param，§5）+ 发命令（ros2 topic pub，§6）。全部是 docker 与 ros2 原语，不依赖本仓库的脚本；本仓库的 launch 文件只在 §4.8 作为可选一键版，脚本只在 §12 作为可选封装列出。
 
 ```mermaid
 flowchart LR
@@ -136,74 +136,78 @@ R07 最终配置就是 Humble 原版 `nav2_params.yaml`；慢转版换成
 核对：`ros2 action list` 里有 `/navigate_to_pose`；`ros2 topic hz /map`；`ros2 lifecycle list /controller_server`
 （或 `ros2 lifecycle get /controller_server` → active）。
 
-### 4.3 终端 3 — 感知链（4 个节点，`ros2 run` + `--params-file`）
+### 4.3 终端 3 — 感知链（4 个节点；一条 launch 或逐个 `ros2 run`）
 
-每个都是 `ros2 run <包> <可执行> --ros-args --params-file <yaml> -p use_sim_time:=true`，四个终端：
+一起起（一个终端）：
+
+```bash
+ros2 launch tb3_coordinator perception_la.launch.py                  # 4 个节点
+ros2 launch tb3_coordinator perception_la.launch.py detector_config:=$HOME/ws/install/tb3_detector/share/tb3_detector/config/la_detector_search_first.yaml
+```
+
+逐个起（4 个终端；launch 文件里每个 Node 就是下面一行，没有别的）：
 
 ```bash
 # 3a 检测：调 grounding 容器的 POST /detect，发 /detector_node/detections + debug 图
 ros2 run tb3_detector la_detector_node --ros-args \
-    --params-file $HOME/ws/install/tb3_detector/share/tb3_detector/config/la_detector.yaml \
-    -p use_sim_time:=true
-
+    --params-file $HOME/ws/install/tb3_detector/share/tb3_detector/config/la_detector.yaml -p use_sim_time:=true
 # 3b 定位：像素 bearing × LiDAR 距离 → /localizer_node/localized_objects（base_link）
 ros2 run tb3_localizer localizer_node --ros-args \
-    --params-file $HOME/ws/install/tb3_localizer/share/tb3_localizer/config/localizer.yaml \
-    -p use_sim_time:=true
-
+    --params-file $HOME/ws/install/tb3_localizer/share/tb3_localizer/config/localizer.yaml -p use_sim_time:=true
 # 3c 短时记忆：观测聚合、1 Hz 重发 → /semantic_memory_node/objects
 ros2 run tb3_memory semantic_memory_node --ros-args \
-    --params-file $HOME/ws/install/tb3_memory/share/tb3_memory/config/semantic_memory.yaml \
-    -p use_sim_time:=true
-
+    --params-file $HOME/ws/install/tb3_memory/share/tb3_memory/config/semantic_memory.yaml -p use_sim_time:=true
 # 3d 地图记忆：TF 到 map、占据栅格校验、候选→landmark → /semantic_map_memory_node/landmark_objects + RViz 标记
 ros2 run tb3_coordinator semantic_map_memory_node --ros-args \
-    --params-file $HOME/ws/install/tb3_coordinator/share/tb3_coordinator/config/coordinator.yaml \
-    -p use_sim_time:=true
+    --params-file $HOME/ws/install/tb3_coordinator/share/tb3_coordinator/config/coordinator.yaml -p use_sim_time:=true
 ```
 
 核对：`ros2 topic hz /detector_node/detections`（~0.7–0.9 Hz）、`ros2 topic hz /localizer_node/localized_objects`、
 `ros2 topic hz /semantic_memory_node/objects`（1 Hz）、`ros2 topic echo /semantic_map_memory_node/landmark_objects --once`。
 3a 起来时 grounding 没就绪会刷 `waiting for grounding server`（无害）。
 
-### 4.4 终端 4 — 探索（3 个节点）
+### 4.4 终端 4 — 探索（3 个节点；一条 launch 或逐个 `ros2 run`）
 
 ```bash
-# 4a 起步旋转扫描（一次性，0.4 rad/s，扫完发 exploration_warmup_complete 后可以 Ctrl+C）
-ros2 run tb3_frontier_exploration startup_map_warmup_node.py --ros-args \
-    -p use_sim_time:=true -p scan_angular_speed:=0.4
+ros2 launch tb3_frontier_exploration exploration.launch.py                          # 3 个节点，起步扫描 0.4 rad/s
+ros2 launch tb3_frontier_exploration exploration.launch.py warmup_angular_speed:=0.3
+```
 
+逐个起：
+
+```bash
+# 4a 起步旋转扫描（一次性，扫完发 exploration_warmup_complete 后可以 Ctrl+C）
+ros2 run tb3_frontier_exploration startup_map_warmup_node.py --ros-args -p use_sim_time:=true -p scan_angular_speed:=0.4
 # 4b frontier 检测（/map + /global_costmap/costmap → /frontiers）
 ros2 run tb3_frontier_exploration frontier_detection_node --ros-args \
-    --params-file $HOME/ws/install/tb3_frontier_exploration/share/tb3_frontier_exploration/config/params.yaml \
-    -p use_sim_time:=true
-
+    --params-file $HOME/ws/install/tb3_frontier_exploration/share/tb3_frontier_exploration/config/params.yaml -p use_sim_time:=true
 # 4c 目标分配（选 frontier → NavigateToPose；探索完发 /exploration_complete）
 ros2 run tb3_frontier_exploration goal_assignment_node --ros-args \
-    --params-file $HOME/ws/install/tb3_frontier_exploration/share/tb3_frontier_exploration/config/params.yaml \
-    -p use_sim_time:=true
+    --params-file $HOME/ws/install/tb3_frontier_exploration/share/tb3_frontier_exploration/config/params.yaml -p use_sim_time:=true
 ```
 
 核对：`ros2 topic echo /frontiers --once`；4c 日志出现 `[action] Goal accepted (frontier)` = 机器人开始动。
 
-### 4.5 终端 5 — 语义查询 + 目标适配 + 协调器（3 个节点）
+### 4.5 终端 5 — 语义查询 + 目标适配 + 协调器（3 个节点；一条 launch 或逐个 `ros2 run`）
+
+```bash
+ros2 launch tb3_coordinator semantic_control.launch.py                               # 3 个节点，LA 词表 registry
+ros2 launch tb3_coordinator semantic_control.launch.py semantic_targets_file:=/abs/path/semantic_targets.yaml
+```
+
+逐个起：
 
 ```bash
 # 5a 查询：命令文本 → registry 类名 → 从 landmark 里选目标；LA 词表的 registry 要显式传
 ros2 run tb3_query semantic_query_node.py --ros-args \
-    --params-file $HOME/ws/install/tb3_query/share/tb3_query/config/semantic_query.yaml \
-    -p use_sim_time:=true \
+    --params-file $HOME/ws/install/tb3_query/share/tb3_query/config/semantic_query.yaml -p use_sim_time:=true \
     -p semantic_targets_file:=$HOME/ws/install/tb3_frontier_exploration/share/tb3_frontier_exploration/config/semantic_targets_la.yaml
-
 # 5b 目标适配：landmark 位置 → 接近点位姿 → Nav2 goal
 ros2 run tb3_nav_adapter nav_goal_adapter_node --ros-args \
-    --params-file $HOME/ws/install/tb3_nav_adapter/share/tb3_nav_adapter/config/nav_goal_adapter.yaml \
-    -p use_sim_time:=true
-
+    --params-file $HOME/ws/install/tb3_nav_adapter/share/tb3_nav_adapter/config/nav_goal_adapter.yaml -p use_sim_time:=true
 # 5c 协调器状态机：EXPLORING / SEARCHING / SEMANTIC_NAV / TARGET_REACHED / IDLE；订阅 /user_command
 ros2 run tb3_coordinator coordinator_node --ros-args \
-    --params-file $HOME/ws/install/tb3_coordinator/share/tb3_coordinator/config/coordinator.yaml \
-    -p use_sim_time:=true
+    --params-file $HOME/ws/install/tb3_coordinator/share/tb3_coordinator/config/coordinator.yaml -p use_sim_time:=true
 ```
 
 核对：`ros2 topic echo /coordinator_node/status` 出现 `EXPLORING`；`ros2 node list` 现在应有 ~20 个节点。
@@ -222,9 +226,10 @@ rviz2 -d $HOME/ws/install/tb3_coordinator/share/tb3_coordinator/rviz/la_demo.rvi
 
 ### 4.7 顺序与时序
 
-上面的编号就是顺序：Gazebo（等 /scan 有数据）→ Nav2（等 `/navigate_to_pose` 出现）→ 感知链 →
-探索 → 查询/适配/协调 → RViz。官方 launch 版是同一套东西加了 10/15/17/20/23 s 的定时器；
-手动起的话每层看到核对项再起下一层就行。全部起完后回 §5 观察、§6 发命令。
+上面的编号就是顺序：Gazebo（等 `/spawn_entity`、/scan）→ Nav2（等 `/navigate_to_pose`）→ 感知链 →
+探索 → 查询/适配/协调 → RViz。六层 = 6 个终端（每层一条 launch）或最多 15 个终端（每节点一个）。
+一键版 §4.8 是同一套东西加了 10/15/17/20/23 s 的定时器；手动起的话每层看到核对项再起下一层。
+全部起完后回 §5 观察、§6 发命令。
 
 ### 4.8 一条命令起全栈（可选，等价于 4.1–4.6）
 
