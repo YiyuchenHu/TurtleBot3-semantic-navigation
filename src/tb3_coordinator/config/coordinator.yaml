@@ -289,3 +289,10 @@ semantic_map_memory_node:
     # ── Visualization ──────────────────────────────────────
     sphere_radius:            0.18
     text_offset_z:            0.45
+    # Label layout for the top-down demo view (la_demo.rviz is
+    # TopDownOrtho at 55 px/m): label 0.32 m above (+y) the sphere so
+    # they do not overlap, 0.22 m text (= 12 px), dark translucent slab
+    # behind it. label_background: false = plain text as before R07.
+    label_offset_y:           0.32
+    label_text_height:        0.22
+    label_background:         true

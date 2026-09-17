@@ -247,7 +247,10 @@ class CoordinatorNode(Node):
         # enable state (their subscriptions are transient_local too).
         self._expl_en_pub = self.create_publisher(Bool, expl_en_topic, latched_qos)
         self._query_cmd_pub = self.create_publisher(String, query_cmd_topic, reliable_qos)
-        self._status_pub = self.create_publisher(String, status_topic, reliable_qos)
+        # Latched: `ros2 topic echo /coordinator_node/status` started at any
+        # time shows the current state at once instead of waiting for the
+        # next transition (status is only published on changes).
+        self._status_pub = self.create_publisher(String, status_topic, latched_qos)
         self._cmd_vel_pub = self.create_publisher(Twist, "/cmd_vel", reliable_qos)
         self._active_search_pub = self.create_publisher(
             String, self.get_parameter("active_search_topic").value, latched_qos)

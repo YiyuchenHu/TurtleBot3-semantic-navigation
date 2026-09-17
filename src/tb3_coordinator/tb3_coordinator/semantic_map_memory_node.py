@@ -126,11 +126,17 @@ class Landmark:
 
 
 CLASS_COLORS = {
-    "person":    ColorRGBA(r=0.2, g=0.8, b=0.2, a=0.9),
-    "bench":     ColorRGBA(r=0.8, g=0.6, b=0.2, a=0.9),
-    "stop sign": ColorRGBA(r=0.9, g=0.1, b=0.1, a=0.9),
+    "person":           ColorRGBA(r=0.2, g=0.8, b=0.2, a=0.9),
+    "bench":            ColorRGBA(r=0.8, g=0.6, b=0.2, a=0.9),
+    "stop sign":        ColorRGBA(r=0.9, g=0.1, b=0.1, a=0.9),
+    # LocateAnything registry classes (R07)
+    "bookshelf":        ColorRGBA(r=0.85, g=0.45, b=0.1, a=0.9),
+    "trash can":        ColorRGBA(r=0.1, g=0.5, b=0.9, a=0.9),
+    "traffic cone":     ColorRGBA(r=1.0, g=0.55, b=0.0, a=0.9),
+    "concrete barrier": ColorRGBA(r=0.7, g=0.7, b=0.75, a=0.9),
 }
 DEFAULT_COLOR = ColorRGBA(r=0.6, g=0.6, b=0.6, a=0.9)
+LABEL_BG_COLOR = ColorRGBA(r=0.0, g=0.0, b=0.0, a=0.65)
 
 
 def world_to_grid(wx, wy, ox, oy, res):
@@ -526,6 +532,14 @@ class SemanticMapMemoryNode(Node):
         self.declare_parameter("search_radius_cells", 15)
         self.declare_parameter("sphere_radius", 0.18)
         self.declare_parameter("text_offset_z", 0.45)
+        # Label layout for the top-down demo view (la_demo.rviz,
+        # TopDownOrtho 55 px/m): the label sits label_offset_y metres
+        # above (+y) the sphere so it does not overlap it, at
+        # label_text_height (0.22 m = 12 px), on a dark translucent slab
+        # (label_background) sized to the text.
+        self.declare_parameter("label_offset_y", 0.32)
+        self.declare_parameter("label_text_height", 0.22)
+        self.declare_parameter("label_background", True)
         self.declare_parameter("publish_rate", 1.0)
         self.declare_parameter("candidate_timeout", 45.0)
         self.declare_parameter("occupied_threshold", 50)
@@ -639,6 +653,9 @@ class SemanticMapMemoryNode(Node):
         self._search_r  = self.get_parameter("search_radius_cells").value
         self._sphere_r  = self.get_parameter("sphere_radius").value
         self._text_z    = self.get_parameter("text_offset_z").value
+        self._label_dy  = float(self.get_parameter("label_offset_y").value)
+        self._label_h   = float(self.get_parameter("label_text_height").value)
+        self._label_bg  = bool(self.get_parameter("label_background").value)
         pub_rate        = self.get_parameter("publish_rate").value
         self._cand_tout = self.get_parameter("candidate_timeout").value
         self._occ_thresh = self.get_parameter("occupied_threshold").value
@@ -1390,6 +1407,28 @@ class SemanticMapMemoryNode(Node):
             s.color = color
             ma.markers.append(s)
             mid += 1
+            text = _marker_label(lm)
+            lx, ly = lm.x, lm.y + self._label_dy
+            if self._label_bg:
+                # Thin slab under the text; the demo camera looks straight
+                # down, so a flat box reads as a label background.
+                b = Marker()
+                b.header.stamp = stamp
+                b.header.frame_id = self._frame
+                b.ns = "semantic_landmarks_label_bg"
+                b.id = mid
+                b.type = Marker.CUBE
+                b.action = Marker.ADD
+                b.pose.position.x = lx
+                b.pose.position.y = ly
+                b.pose.position.z = self._text_z - 0.05
+                b.pose.orientation.w = 1.0
+                b.scale.x = 0.62 * self._label_h * len(text) + 0.4 * self._label_h
+                b.scale.y = 1.35 * self._label_h
+                b.scale.z = 0.01
+                b.color = LABEL_BG_COLOR
+                ma.markers.append(b)
+                mid += 1
             t = Marker()
             t.header.stamp = stamp
             t.header.frame_id = self._frame
@@ -1397,15 +1436,22 @@ class SemanticMapMemoryNode(Node):
             t.id = mid
             t.type = Marker.TEXT_VIEW_FACING
             t.action = Marker.ADD
-            t.pose.position.x = lm.x
-            t.pose.position.y = lm.y
+            t.pose.position.x = lx
+            t.pose.position.y = ly
             t.pose.position.z = self._text_z
             t.pose.orientation.w = 1.0
-            t.scale.z = 0.15
+            t.scale.z = self._label_h
             t.color = ColorRGBA(r=1.0, g=1.0, b=1.0, a=1.0)
-            t.text = _marker_label(lm)
+            t.text = text
             ma.markers.append(t)
             mid += 1
+        # A landmark that was relabelled/removed leaves stale ids behind;
+        # DELETEALL first so the array is always exactly the current set.
+        clear = Marker()
+        clear.header.stamp = stamp
+        clear.header.frame_id = self._frame
+        clear.action = Marker.DELETEALL
+        ma.markers.insert(0, clear)
         self._pub.publish(ma)
         self._publish_landmark_objects()
 
