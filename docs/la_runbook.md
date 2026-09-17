@@ -212,7 +212,14 @@ ros2 run tb3_coordinator coordinator_node --ros-args \
     --params-file $HOME/ws/install/tb3_coordinator/share/tb3_coordinator/config/coordinator.yaml -p use_sim_time:=true
 ```
 
-核对：`ros2 topic echo /coordinator_node/status` 出现 `EXPLORING`；`ros2 node list` 现在应有 ~20 个节点。
+核对：`ros2 topic echo /coordinator_node/status` 出现 `[IDLE] started in IDLE mode — standing still, waiting for /user_command`；
+`ros2 node list` 现在应有 ~20 个节点。
+
+**R07 起默认原地等命令**（`coordinator.yaml` `start_mode: "idle"`）：coordinator 启动时 latched 发
+`/exploration_enabled=false`，goal_assignment（`start_enabled: false`）与起步扫描节点（`wait_for_exploration_enabled`）
+都订阅它（transient_local，所以 ④⑤ 谁先起都一样），第一条 memory 答不上来的命令走搜索路径时才置 true——
+那一刻起步扫描先转 ±45°，然后 frontier 探索开始。到达 / NOT FOUND 后回 IDLE 原地等下一条。
+旧的"一起来就探索"：`start_mode: "exploring"`；没有 coordinator 单独跑探索：`exploration.launch.py start_enabled:=true`。
 
 ### 4.6 终端 6 — RViz（带默认配置文件）
 

@@ -95,6 +95,12 @@ public:
     declare_parameter<double>("failed_goal_ttl_sec", 90.0);
     declare_parameter<int>("failed_goal_max_entries", 64);
     declare_parameter<double>("exploration_complete_log_interval", 5.0);
+    // Whether exploration runs before anything is published on
+    // /exploration_enabled. false (R07): stand still until the
+    // coordinator (or a manual `ros2 topic pub`) enables it; the
+    // subscription is latched so the order the nodes start in does not
+    // matter. Standalone exploration without a coordinator: start_enabled:=true.
+    declare_parameter<bool>("start_enabled", false);
     declare_parameter<bool>("require_startup_warmup", false);
     declare_parameter<std::string>("startup_warmup_complete_topic", "exploration_warmup_complete");
     declare_parameter<double>("startup_warmup_timeout_sec", 90.0);
@@ -184,8 +190,11 @@ public:
       warmup_topic, rclcpp::QoS(10),
       std::bind(&GoalAssignmentNode::warmupCompleteCallback, this, std::placeholders::_1));
 
+    exploration_enabled_ = get_parameter("start_enabled").as_bool();
+    RCLCPP_INFO(get_logger(), "[exploration] start_enabled=%s (waiting for /exploration_enabled)",
+      exploration_enabled_ ? "true" : "false");
     exploration_enabled_sub_ = create_subscription<std_msgs::msg::Bool>(
-      "exploration_enabled", rclcpp::QoS(10),
+      "exploration_enabled", rclcpp::QoS(10).transient_local(),
       [this](const std_msgs::msg::Bool::SharedPtr msg) {
         exploration_enabled_ = msg->data;
         RCLCPP_INFO(get_logger(), "[exploration] %s via /exploration_enabled",

@@ -49,6 +49,10 @@ frontier_detection_node:
 
 goal_assignment_node:
   ros__parameters:
+    # Explore before anything arrives on /exploration_enabled? false (R07):
+    # stand still until the coordinator enables it (first search command).
+    # Standalone exploration without a coordinator: set true.
+    start_enabled: false
     # Odometry topic (e.g. /odom or /odometry/filtered from robot_localization).
     odom_topic: "/odometry/filtered"
 

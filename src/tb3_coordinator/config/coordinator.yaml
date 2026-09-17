@@ -12,6 +12,11 @@ coordinator_node:
     status_topic:             "~/status"
     navigate_to_pose_action:  "navigate_to_pose"
     nav_goal_timeout_sec:     60.0
+    # Boot behaviour. "idle" (R07 final): stand still with exploration off
+    # until the first /user_command; a target the memory does not know
+    # starts exploration through the search path, a known one is
+    # navigated to directly. "exploring": map from boot (pre-R07).
+    start_mode:               "idle"
     auto_resume_exploration:  true
     # R04 demo shape: after TARGET_REACHED / TARGET NOT FOUND go to IDLE
     # and hold position (exploration off, zero cmd_vel) until the next

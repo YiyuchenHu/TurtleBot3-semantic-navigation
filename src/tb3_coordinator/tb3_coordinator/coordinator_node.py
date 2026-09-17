@@ -113,6 +113,12 @@ class CoordinatorNode(Node):
         self.declare_parameter("status_topic", "~/status")
         self.declare_parameter("navigate_to_pose_action", "navigate_to_pose")
         self.declare_parameter("auto_resume_exploration", True)
+        # "idle": start standing still, exploration off, and wait for the
+        # first /user_command (a query the memory cannot answer enables
+        # exploration through the search path; a query it can answer
+        # navigates directly). "exploring": the pre-R07 behaviour — map
+        # from boot, accept commands on the way.
+        self.declare_parameter("start_mode", "idle")
         # R04 demo shape: after a navigation terminal state (TARGET_REACHED
         # or TARGET NOT FOUND) go to IDLE and hold position instead of
         # auto-resuming exploration. Takes precedence over
@@ -236,7 +242,10 @@ class CoordinatorNode(Node):
         )
 
         # ── Publishers ────────────────────────────────────────────────────
-        self._expl_en_pub = self.create_publisher(Bool, expl_en_topic, reliable_qos)
+        # Latched: goal_assignment_node / startup_map_warmup_node may
+        # start after the coordinator and must still see the current
+        # enable state (their subscriptions are transient_local too).
+        self._expl_en_pub = self.create_publisher(Bool, expl_en_topic, latched_qos)
         self._query_cmd_pub = self.create_publisher(String, query_cmd_topic, reliable_qos)
         self._status_pub = self.create_publisher(String, status_topic, reliable_qos)
         self._cmd_vel_pub = self.create_publisher(Twist, "/cmd_vel", reliable_qos)
@@ -268,15 +277,23 @@ class CoordinatorNode(Node):
         # ── Nav2 action client ────────────────────────────────────────────
         self._nav_client = ActionClient(self, NavigateToPose, nav_action_name)
 
-        self._set_exploration(True)
+        start_mode = str(self.get_parameter("start_mode").value).strip().lower()
+        if start_mode == "exploring":
+            self._set_exploration(True)
+        else:
+            self._mode = Mode.IDLE
+            self._set_exploration(False)
         # Clean latched state: a subscriber that outlived a previous
         # coordinator (crash mid-search) drops its stale injection.
         self._publish_active_search("")
-        self._publish_status("started in EXPLORING mode")
+        self._publish_status("started in %s mode%s" % (
+            self._mode.name, "" if self._mode == Mode.EXPLORING
+            else " — standing still, waiting for /user_command"))
 
         self.create_timer(5.0, self._check_sweep_trigger)
         self.get_logger().info(
-            "CoordinatorNode ready — mode=EXPLORING  nav_action=%s" % nav_action_name)
+            "CoordinatorNode ready — mode=%s  nav_action=%s"
+            % (self._mode.name, nav_action_name))
 
     # ── Mode helpers ──────────────────────────────────────────────────────
 

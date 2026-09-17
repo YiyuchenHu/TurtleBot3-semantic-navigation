@@ -16,8 +16,13 @@ curl http://127.0.0.1:8801/health                     # 等到 "device": "cuda"�
 
 ```bash
 docker exec -it docker-sim-1 bash
+
+```
+
+```bash
 source /opt/ros/humble/setup.bash
 source ~/ws/install/setup.bash
+
 ```
 
 ## 2. 六层，按顺序，每层一个终端
@@ -38,13 +43,13 @@ ros2 launch nav2_bringup bringup_launch.py use_sim_time:=true slam:=True autosta
 ros2 launch tb3_coordinator perception_la.launch.py
 #    就绪：ros2 topic hz /detector_node/detections   （~0.8 Hz）
 
-# ④ 探索（3 节点）
+# ④ 探索（3 节点）——起来后机器人不动，等 ⑤ 的第一条搜索命令才开始探索
 ros2 launch tb3_frontier_exploration exploration.launch.py
-#    就绪：日志 [action] Goal accepted，机器人开始动
+#    就绪：日志 [exploration] DISABLED via /exploration_enabled（⑤ 起来后出现）
 
-# ⑤ 查询 + 适配 + 协调（3 节点）
+# ⑤ 查询 + 适配 + 协调（3 节点）——默认 start_mode: idle，原地等命令
 ros2 launch tb3_coordinator semantic_control.launch.py
-#    就绪：ros2 topic echo /coordinator_node/status  →  EXPLORING
+#    就绪：ros2 topic echo /coordinator_node/status  →  [IDLE] started in IDLE mode — standing still, waiting for /user_command
 
 # ⑥ RViz（带默认配置）
 rviz2 -d $HOME/ws/install/tb3_coordinator/share/tb3_coordinator/rviz/la_demo.rviz --ros-args -p use_sim_time:=true
@@ -65,7 +70,10 @@ ros2 topic pub -1 -w 1 /user_command std_msgs/msg/String "{data: 'find a bicycle
 ```
 
 `-1` 发一条退出，`-w 1` 等订阅者出现再发（不加会丢首条）。不要连发两次（第二条算抢占）。
-memory 里已有 → 日志 `Query OK: … → bookshelf_0 at (x, y)` 直达；没有 → `[search] … injected` 去找。
+memory 里已有 → 日志 `Query OK: … → bookshelf_0 at (x, y)` 直达；没有 → `[search] … injected, exploration enabled`：
+这时探索才开始（起步先 ±45° 扫一下，然后建图找目标），到达/找不到后回 IDLE 原地等下一条。
+想一起来就自由探索（旧行为）：⑤ 加 `start_mode:=exploring`？——不是 launch 参数，改 `coordinator.yaml` 的
+`start_mode: "exploring"`；只跑 ④ 不跑 ⑤ 时：`exploration.launch.py start_enabled:=true`。
 
 ## 4. 单节点调试（只在需要时）
 

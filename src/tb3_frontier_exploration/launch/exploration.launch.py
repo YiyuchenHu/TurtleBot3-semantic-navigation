@@ -4,6 +4,7 @@ docs/la_runbook.md §4.4).
 
     ros2 launch tb3_frontier_exploration exploration.launch.py
     ros2 launch tb3_frontier_exploration exploration.launch.py warmup_angular_speed:=0.3
+    ros2 launch tb3_frontier_exploration exploration.launch.py start_enabled:=true   # no coordinator: explore from boot
 
 Each Node is exactly one `ros2 run` line; start them by hand when testing
 one of them (params.yaml already carries map_topic / costmap_topic /
@@ -41,6 +42,9 @@ def generate_launch_description():
         DeclareLaunchArgument("odom_topic", default_value="/odometry/filtered",
                              description="Odometry topic for goal assignment"),
 
+        DeclareLaunchArgument("start_enabled", default_value="false",
+                              description="explore before /exploration_enabled arrives "
+                                          "(standalone use without a coordinator)"),
         DeclareLaunchArgument("warmup_angular_speed", default_value="0.4",
                              description="Start-up rotation scan speed (rad/s)"),
 
@@ -89,7 +93,9 @@ def generate_launch_description():
                 # is an intentional no-op hook (goal_assignment_node.cpp
                 # odomCallback); the argument is kept working so the topic name
                 # stays overridable, not because pose comes from it.
-                {"odom_topic": odom_topic},
+                {"odom_topic": odom_topic,
+                 "start_enabled": ParameterValue(
+                     LaunchConfiguration("start_enabled"), value_type=bool)},
             ],
             output="screen",
         ),
