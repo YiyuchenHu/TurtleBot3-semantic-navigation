@@ -1,5 +1,7 @@
 # LocateAnything 模式运行手册（la_runbook）
 
+> 只想知道怎么跑：看 [quickstart.md](quickstart.md)（一页命令）。本文是细节与坑。
+
 手动开终端跑通 LocateAnything 语义导航栈并录屏的操作手册。每个终端一节，命令逐条可直接粘贴，**只用 docker / source / ros2 / ffmpeg 原语**（R07 起；仓库脚本降级为 §12 可选封装）。数据（预期耗时、预期日志行）全部来自 R02b/R02c 验收实测。
 
 宿主机前提：NVIDIA 驱动 + NVIDIA Container Toolkit + X11 桌面；仓库位于
