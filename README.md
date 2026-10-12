@@ -18,6 +18,10 @@ execution driven by simple rule-based text commands (e.g. `go to person`, `go to
 
 ## LocateAnything Mode (Open-Vocabulary Perception)
 
+![LocateAnything semantic-navigation pipeline](docs/la_pipeline.png)
+
+*A user command first queries semantic memory; if the target is unknown, the robot explores with LocateAnything-3B, localizes and confirms the landmark, approaches it with Nav2, and then holds for the next command.*
+
 The `feat/locateanything` work replaces YOLOv8n with **NVIDIA LocateAnything-3B**
 as the only perception model in the running stack: detection happens over HTTP
 (`POST /detect`) in a GPU grounding container (`grounding/` + `docker/`), the
