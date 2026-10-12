@@ -6,6 +6,11 @@ execution driven by simple rule-based text commands (e.g. `go to person`, `go to
 
 **Stack:** Ubuntu 22.04 · ROS 2 Humble · Gazebo Classic · TurtleBot3 `waffle_pi` · YOLOv8n · Nav2 · SLAM Toolbox launched through `nav2_bringup` with `slam:=True`.
 
+> **LocateAnything version:** the [`feat/locateanything`](https://github.com/YiyuchenHu/TurtleBot3-semantic-navigation/tree/feat/locateanything) branch replaces
+> YOLOv8n with NVIDIA LocateAnything-3B (open-vocabulary detection served from a GPU container) and adds
+> command-first search: the robot waits for a command and explores only to find an object that is not on its
+> map yet. This `main` branch keeps the original YOLOv8n stack described below.
+
 ## Project Highlights
 
 - **End-to-end semantic navigation pipeline on TurtleBot3 Waffle Pi**, from perception and SLAM through semantic memory to Nav2 goal execution, brought up by a single `ros2 launch` entry point.

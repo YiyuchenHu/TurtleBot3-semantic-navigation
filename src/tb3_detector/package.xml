@@ -8,7 +8,7 @@
     Stage-1 perception: run YOLOv8 object detection on the TurtleBot3 camera image
     and publish DetectionArray results for downstream localizer / semantic navigation.
   </description>
-  <maintainer email="user@todo.todo">Your Name</maintainer>
+  <maintainer email="yiyuchenhu@gmail.com">Yiyuchen Hu</maintainer>
   <license>Apache-2.0</license>
 
   <buildtool_depend>ament_python</buildtool_depend>
