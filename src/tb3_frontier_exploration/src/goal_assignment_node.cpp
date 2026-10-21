@@ -91,12 +91,12 @@ public:
     // The single slot was the direct cause of the 40 s limit cycle: a frontier
     // goal failed and was recorded, the fallback goal then failed and
     // OVERWROTE that record, which re-armed the very frontier that had just
-    // failed. See reports/chat_return_0827_wedge.md.
+    // failed.
     declare_parameter<double>("failed_goal_ttl_sec", 90.0);
     declare_parameter<int>("failed_goal_max_entries", 64);
     declare_parameter<double>("exploration_complete_log_interval", 5.0);
     // Whether exploration runs before anything is published on
-    // /exploration_enabled. false (R07): stand still until the
+    // /exploration_enabled. false: stand still until the
     // coordinator (or a manual `ros2 topic pub`) enables it; the
     // subscription is latched so the order the nodes start in does not
     // matter. Standalone exploration without a coordinator: start_enabled:=true.
@@ -201,7 +201,7 @@ public:
           exploration_enabled_ ? "ENABLED" : "DISABLED");
       });
 
-    // Phase 2c search link: the coordinator's SEARCHING state needs to
+    // Search link: the coordinator's SEARCHING state needs to
     // know when the scan is finished to declare NOT FOUND. Latched
     // (transient_local) so a coordinator that starts or re-enters the
     // decision late still sees the current value.

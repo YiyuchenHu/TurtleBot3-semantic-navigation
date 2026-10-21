@@ -1,6 +1,6 @@
 """
 semantic_control.launch.py — query + goal adapter + coordinator, 3 nodes
-(layer 5 of docs/la_runbook.md §4.5). Consumes /user_command and the
+(layer 5 of the per-layer manual bring-up). Consumes /user_command and the
 landmark stream; drives Nav2 through NavigateToPose.
 
     ros2 launch tb3_coordinator semantic_control.launch.py

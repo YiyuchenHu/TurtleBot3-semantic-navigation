@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-test_query_core.py — unit tests for the pure query layer (R07):
+test_query_core.py — unit tests for the pure query layer:
 expression canonicalisation and attribute-based target selection.
 
 No ROS graph — run directly or under pytest:

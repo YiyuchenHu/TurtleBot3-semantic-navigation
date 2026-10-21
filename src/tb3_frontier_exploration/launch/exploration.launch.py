@@ -1,6 +1,6 @@
 """
-exploration.launch.py — frontier exploration, 3 nodes (layer 4 of
-docs/la_runbook.md §4.4).
+exploration.launch.py — frontier exploration, 3 nodes (layer 4 of the
+per-layer manual bring-up).
 
     ros2 launch tb3_frontier_exploration exploration.launch.py
     ros2 launch tb3_frontier_exploration exploration.launch.py warmup_angular_speed:=0.3

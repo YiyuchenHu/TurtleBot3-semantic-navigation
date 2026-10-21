@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """Grab camera frames from the running sim stack (probe/debug utility).
 
-Promoted from reports/R02c_probe/grab_frames.py (R03 wrap-up): the tool
-every perception probe starts with — capture what the robot actually
+The tool every perception probe starts with — capture what the robot actually
 sees, then feed the frames to grounding/eval scripts or POST /detect.
 
 Run INSIDE the sim container while the stack is up:

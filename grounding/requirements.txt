@@ -2,15 +2,16 @@
 opencv-python-headless
 numpy
 
-# locate_anything backend (NVIDIA Ampere+ GPU, Linux) — versions pinned
-# per https://huggingface.co/nvidia/LocateAnything-3B. Install torch for
-# your CUDA version first, e.g.:
-#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+# locate_anything backend (NVIDIA GPU, Linux) — versions pinned per
+# https://huggingface.co/nvidia/LocateAnything-3B and docker/Dockerfile.grounding.
+# Install torch first; the validated build is cu128 (driver >= 570):
+#   pip install torch==2.11.0 torchvision==0.26.0 --index-url https://download.pytorch.org/whl/cu128
 #
 # transformers==4.57.1
 # numpy==1.25.0
 # Pillow==11.1.0
 # opencv-python-headless==4.11.0.86
-# peft
+# peft==0.20.0
+# accelerate==1.15.0
 # decord==0.6.0
 # lmdb==1.7.5

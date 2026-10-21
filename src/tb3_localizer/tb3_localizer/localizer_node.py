@@ -63,11 +63,11 @@ class LocalizerNode(Node):
         self.declare_parameter("max_valid_range", 8.0)
         self.declare_parameter("edge_margin_px", 40)
         self.declare_parameter("edge_drop_summary_sec", 30.0)
-        # ── bbox height ↔ ray distance consistency gate (R05) ──────────
+        # ── bbox height ↔ ray distance consistency gate ────────────────
         # The scan ray is cast at the bbox CENTRE COLUMN, so a detection
         # of a FAR object whose column crosses a NEARER obstacle gets the
         # nearer range and its observation lands on the wrong object
-        # (R04 §4.4; R05 mapping smoke: three "person wearing a blue
+        # (in a mapping test run: three "person wearing a blue
         # shirt" ghosts and one cone ghost, all from far boxes localized
         # onto near objects — the occlusion filter only helps when the
         # occluder is DETECTED in the same frame). Gate: a real object at
@@ -84,7 +84,7 @@ class LocalizerNode(Node):
         # shirt color expressions and any injected person search term).
         # Squat classes carry their own TIGHTER tolerance: their absolute
         # pixel heights are small, so the default 2.0 leaves the gate
-        # toothless exactly where the R05 smoke-3 cone ghost slipped
+        # toothless exactly where a test-run cone ghost slipped
         # through (far cone 88 px vs 84 px required on a 1.1 m ray).
         # Squat classes (prior <= 0.8 m) are also gated TWO-SIDED: a box
         # much TALLER than expected is a person force-matched into the
@@ -93,12 +93,12 @@ class LocalizerNode(Node):
         self.declare_parameter("height_priors", [
             "person:1.75", "bookshelf:1.2:1.5", "trash can:0.6:1.5",
             "traffic cone:0.9:1.4", "concrete barrier:1.1"])
-        # ── Scan/stamp matching (R06a step 1) ────────────────────────
+        # ── Scan/stamp matching ──────────────────────────────────────
         # The Detection2DArray carries the SOURCE IMAGE stamp, but the
         # ray used to be cast into whatever /scan had arrived last when
         # the detections arrived — i.e. the scan taken ~RTT (0.35-0.5 s)
         # AFTER the image. At 0.4 rad/s that is a ~10 deg yaw skew
-        # between the bbox bearing and the scan: R06a audit over a 61 s
+        # between the bbox bearing and the scan: an audit over a 61 s
         # turning bag, 94 turning boxes: on-object 69% -> 81% once the
         # ray is cast into the scan whose stamp is nearest the image
         # stamp (a cone box at 3.1 m was hitting a person's leg at 1.1 m

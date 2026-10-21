@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-la_detector_node.py — LocateAnything mapping-path detector (Phase 2b).
+la_detector_node.py — LocateAnything mapping-path detector.
 
 Drop-in replacement producer for the YOLO detector_node: subscribes to
 the camera, calls the grounding server's fixed-vocabulary POST /detect
 over HTTP, and publishes vision_msgs/Detection2DArray on the SAME
 absolute topic (/detector_node/detections) with header.stamp set to the
 SOURCE IMAGE stamp — so the downstream localizer → memory → map-memory →
-query chain runs unchanged (R01 §5.1/§5.3).
+query chain runs unchanged.
 
 Differences from detector_node.py, all deliberate:
   * No local model: inference is one HTTP round-trip (~0.2–0.3 s) to the
@@ -17,11 +17,11 @@ Differences from detector_node.py, all deliberate:
     exceeds `max_angular_vel` — the HTTP latency plus the localizer's
     latest-scan bearing match punish detections taken mid-spin.
   * Cross-class dedup: the model may list one object under several
-    vocabulary words (R01 §2.3); overlapping boxes of different labels
+    vocabulary words; overlapping boxes of different labels
     (IoU ≥ `cross_class_iou`) collapse to the earliest vocabulary entry.
 
 The YOLO node stays in the package untouched; only the launch decides
-which producer runs (ground rule 7).
+which producer runs.
 """
 
 from __future__ import annotations
@@ -65,7 +65,7 @@ def containment(inner: list[float], outer: list[float]) -> float:
     """Fraction of `inner`'s area that lies inside `outer`.
 
     Asymmetric on purpose: it catches the PART-OF-A-WHOLE mislabel that
-    IoU misses. R05 A1: at 2.4-2.9 m the model boxed only the green
+    IoU misses. In a test run, at 2.4-2.9 m the model boxed only the green
     SHIRT of the centre person and labeled it "trash can" (green box,
     right apparent size — no geometric filter can reject it on its own).
     That box sits fully inside the "person wearing a green shirt"
@@ -89,7 +89,7 @@ def filter_bearing_occluded(dets: list[dict],
     The localizer turns a bbox into (x, y) by casting the scan ray at the
     bbox CENTRE column — so when a farther object D is seen past a nearer
     object E (their image columns overlap), the ray hits E and D's
-    observation lands on E's position. Observed live in run 1: the cone
+    observation lands on E's position. Observed live in a test run: the cone
     behind the centre person (seen from the west) and the bookshelf
     behind the same person (seen from the south) each planted hundreds of
     wrong-label observations on the person, promoting fake landmarks.
@@ -123,7 +123,7 @@ def labels_agree(a: str, b: str) -> bool:
     "person" ⊆ "person wearing a green shirt" → agree (the model saying
     both about one box is double-labeling, not a mislabel). "person
     wearing a red shirt" vs "person wearing a green shirt" differ in a
-    token → conflict. Used by the coverage veto (R04): without it, the
+    token → conflict. Used by the coverage veto: without it, the
     shirt-color coverage categories veto the very observation a person
     search (or a color search) is trying to accumulate.
     """
@@ -155,7 +155,7 @@ def dedup_cross_class(dets: list[dict], priority: dict[str, int],
 
 
 class BoxTracker:
-    """Short-term tracks over consecutive /detect results (R06a step 6):
+    """Short-term tracks over consecutive /detect results:
     IoU association after shifting every live track by the yaw change
     since its last frame (the same linear pixel<->bearing model the
     localizer uses). Same-family labels (token subset, e.g. "person" and
@@ -252,8 +252,8 @@ class LaDetectorNode(Node):
 
         self.declare_parameter("server_url", "http://127.0.0.1:8801")
         self.declare_parameter("request_timeout_sec", 5.0)
-        # ── Generation options sent with every /detect (R06a step 3c) ──
-        # Measured on the R05 60-frame capture (reports/R06a): greedy ==
+        # ── Generation options sent with every /detect ─────────────────
+        # Measured on a 60-frame capture: greedy ==
         # sampling in latency, deterministic, reproduces 92% of the
         # sampled boxes (the rest are frame-edge person boxes the
         # localizer drops anyway); hybrid == fast on the median, but
@@ -270,9 +270,9 @@ class LaDetectorNode(Node):
         self.declare_parameter("gen_tokens_per_category", 24)
         # Input downscale (longer side, px; 0 = native 640). Measured:
         # 448 px saves ~45 ms but halves concrete-barrier recall and drops
-        # the far shirt-colour boxes — kept at native (R06a step 3b).
+        # the far shirt-colour boxes — kept at native.
         self.declare_parameter("gen_max_side", 0)
-        # ── Two-phase coverage (R06a step 3a, OFF) ───────────────────
+        # ── Two-phase coverage (OFF) ─────────────────────────────────
         # Primary request = vocabulary + physical coverage only; the
         # listed expression terms are requested in a SECOND call on the
         # same frame only when the primary hit `two_phase_trigger`.
@@ -290,7 +290,7 @@ class LaDetectorNode(Node):
                                ["person", "bookshelf", "trash can", "traffic cone"])
         self.declare_parameter("min_interval_sec", 0.3)
         self.declare_parameter("max_angular_vel", 0.5)
-        # ── Frame-skip rules (R06a step 4) ───────────────────────────
+        # ── Frame-skip rules ─────────────────────────────────────────
         # (a) nothing for the planar localizer to hit: no LiDAR return
         #     closer than `skip_lidar_range_m` inside the camera FOV
         #     (at least `skip_lidar_min_rays` rays, i.e. a cluster) →
@@ -319,7 +319,7 @@ class LaDetectorNode(Node):
         # Coverage categories: requested from the model and used for the
         # occlusion filter and same-object veto, but NEVER published —
         # they keep the geometric safety nets sighted without putting
-        # the classes into the mapping vocabulary (R02c smoke run 1
+        # the classes into the mapping vocabulary (test-run
         # post-mortem: with vocabulary ["person"] alone, both fake
         # landmarks were caused by boxes the filters could no longer
         # see).
@@ -330,14 +330,14 @@ class LaDetectorNode(Node):
         self.declare_parameter("detections_topic", "/detector_node/detections")
         self.declare_parameter("debug_image_topic", "/detector_node/debug_image")
         self.declare_parameter("publish_debug_image", True)
-        # R05: the debug image is republished at CAMERA rate with the most
+        # The debug image is republished at CAMERA rate with the most
         # recent /detect overlay; boxes older than this turn grey.
         self.declare_parameter("debug_stale_after_sec", 1.5)
-        # R06a step 5: shift the stale overlay boxes horizontally by the
+        # Shift the stale overlay boxes horizontally by the
         # yaw change since their image (odom), so during a turn the boxes
         # stay on the objects for the ~0.4 s the next /detect takes.
         self.declare_parameter("debug_motion_comp", True)
-        # ── Short-term tracking (R06a step 6) ────────────────────────
+        # ── Short-term tracking ──────────────────────────────────────
         # IoU association across consecutive results after yaw
         # compensation; fills Detection2D.id ("<n>"). Annotation only —
         # memory does not read it (see BoxTracker on why).
@@ -353,7 +353,7 @@ class LaDetectorNode(Node):
         self._server_url = str(g("server_url")).rstrip("/")
         self._timeout = float(g("request_timeout_sec"))
         self._base_vocabulary = [str(v) for v in g("vocabulary") if str(v).strip()]
-        # ── Search-link injection (Phase 2c) ────────────────────────────
+        # ── Search-link injection ───────────────────────────────────────
         # /active_search carries one free-form expression (empty = none).
         # While active it is PREPENDED to the vocabulary, so it holds the
         # highest cross-class dedup priority — an overlapping box keeps
@@ -399,7 +399,7 @@ class LaDetectorNode(Node):
         queue = int(g("queue_size"))
         self._stats_interval = float(g("stats_interval_sec"))
 
-        # R04 search-first profile: an EMPTY base vocabulary is allowed as
+        # Search-first profile: an EMPTY base vocabulary is allowed as
         # long as coverage categories exist — nothing is published (and
         # nothing enters memory) between searches; only the /active_search
         # expression is ever published. Both empty would send empty
@@ -417,7 +417,7 @@ class LaDetectorNode(Node):
         self._latest_scan: LaserScan | None = None
         self._server_seen = False
         self._options_logged = False
-        # R05 camera-rate debug: /detect runs in a worker thread so the
+        # Camera-rate debug: /detect runs in a worker thread so the
         # image callback never blocks on HTTP; the callback republishes
         # the debug image EVERY frame with the latest finished overlay.
         # `_inflight` serializes requests — the detection cadence stays
@@ -477,18 +477,17 @@ class LaDetectorNode(Node):
 
         The search term (if any) goes FIRST: index 0 is the best (lowest)
         priority in dedup_cross_class, so a search-term box always wins a
-        cross-class overlap against base-vocabulary boxes (Phase 2c
-        constraint a). A term that equals a base word is not duplicated.
+        cross-class overlap against base-vocabulary boxes. A term that equals a base word is not duplicated.
         """
         base = self._base_vocabulary
         if self._search_term:
             # A base word that is a token-subset of the search term is
-            # SUSPENDED for the duration of the search. Measured (R05
-            # green-shirt probe): with "person" in the vocabulary the
+            # SUSPENDED for the duration of the search. Measured (green-
+            # shirt probe): with "person" in the vocabulary the
             # model answers almost every frame with the generic label —
             # 503 "person" observations against 18 for the injected
             # "person wearing a green shirt", nowhere near a promotion.
-            # R04's search-first profile succeeded on 11 observations
+            # The search-first profile succeeded on 11 observations
             # precisely because the generic word was absent and the
             # model had to choose between the expression and the color
             # coverage classes. Suspending (not deleting) keeps mapping
@@ -589,7 +588,7 @@ class LaDetectorNode(Node):
         if abs(self._angular_vel) > self._max_ang_vel:
             self._st["skipped_spin"] += 1
             return
-        # Skip rules (R06a step 4), overridden by the periodic fallback.
+        # Skip rules, overridden by the periodic fallback.
         forced = (self._last_request_t is not None
                   and now - self._last_request_t >= self._skip_fallback)
         if not forced:
@@ -657,7 +656,7 @@ class LaDetectorNode(Node):
         # Coverage veto: a publishable box that is the SAME object as a
         # coverage box (IoU >= cross_class_iou) is a forced-choice
         # mislabel — the model also named it by its coverage class.
-        # R02c smoke run 1: the cone collecting "trash can" boxes this
+        # In a test run, the cone collecting "trash can" boxes this
         # way promoted a fake landmark the search then navigated to.
         if cover_dets:
             kept = []
@@ -760,7 +759,7 @@ class LaDetectorNode(Node):
         msg = Detection2DArray()
         # Source image stamp, NOT receive/response time: downstream TF and
         # scan association must see the same timeline as the YOLO node
-        # produced (R01 §5.3).
+        # produced.
         msg.header = header
         for d in dets:
             det = Detection2D()

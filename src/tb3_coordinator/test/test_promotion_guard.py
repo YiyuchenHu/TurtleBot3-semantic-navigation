@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 test_promotion_guard.py — unit tests for the distinct-detection promotion
-guard (`min_distinct_observations`, R07 final demo).
+guard (`min_distinct_observations`).
 
 Pure-function layer only: `promotion_ready` plus the `Candidate` key
 bookkeeping, driven by the two sequences the guard was designed on. No ROS
@@ -46,7 +46,7 @@ def new_cand(label, obs_id, stamp_s):
 
 # ── the case this guard exists for ───────────────────────────────────────
 def test_r07_smoke_ghost_is_held():
-    """R07 smoke +214 s (stack_R07_smoke1_stamped.log): two mislabelled
+    """Recorded test run, +214 s: two mislabelled
     "trash can" frames on the green-shirt person, stamps 1789544917.52 and
     1789544919.99, became memory objects trash can_3 / trash can_4, each
     republished at 1 Hz onto the same map point -> the candidate went
@@ -71,7 +71,7 @@ def test_r07_smoke_ghost_is_held():
 
 # ── real objects must be unaffected ──────────────────────────────────────
 def test_bag_ab_barrier_still_promotes():
-    """bag_ab (R07 step-1 replay, stamped instance): the barrier candidate
+    """Recorded bag replay (stamped instance): the barrier candidate
     at (-2.18,-1.45) reached n=8 on memory object concrete barrier_0 with
     stamps 41.53, 45.03, 45.90 s (rows json) -> 3 distinct -> promotes at
     the same message as before the guard.
@@ -102,7 +102,7 @@ def test_stationary_robot_many_frames_one_object():
 # ── search classes: same 3, on top of search_min_observations 3 ─────────
 def test_search_class_needs_three_frames_not_three_republishes():
     """Green-shirt search: one frame republished 3x used to promote at
-    n=3; now it needs 3 distinct frames (R05 probe: 6/60 frames carry the
+    n=3; now it needs 3 distinct frames (offline probe: 6/60 frames carry the
     box, so 3 frames arrive within one sweep)."""
     label = "person wearing a green shirt"
     c = new_cand(label, label + "_0", 10.0)

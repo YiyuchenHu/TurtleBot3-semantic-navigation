@@ -42,7 +42,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # ── Gazebo models baked into the image ───────────────────────────────────
 # warehouse_models_person.world includes model://person_standing (plus
-# ground_plane and sun), and — Phase 2b — model://bookshelf,
+# ground_plane and sun), plus model://bookshelf,
 # model://first_2015_trash_can and model://construction_cone for the
 # open-vocabulary targets. None of them ship with the gazebo11 apt
 # packages; Gazebo Classic would try to fetch them from the online model

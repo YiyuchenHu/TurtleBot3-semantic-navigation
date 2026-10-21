@@ -60,8 +60,8 @@ class Candidate:
     # Distinct (memory object id, observation stamp) pairs behind
     # obs_count. semantic_memory_node republishes every live object at
     # 1 Hz for up to stale_timeout (5 s) after its last detection, and
-    # since the R07 TF fix those republishes land on the same map point,
-    # so obs_count counts one detection 3-6 times (R07 smoke: 5 trash-can
+    # since the memory TF fix those republishes land on the same map point,
+    # so obs_count counts one detection 3-6 times (a test run: 5 trash-can
     # detections -> n=27). This set is what the promotion guard reads.
     obs_keys: set = field(default_factory=set)
     held_logged: bool = False
@@ -119,7 +119,7 @@ class Landmark:
     # `trash_can_1` landmark sitting on the chair). Keeping the counts turns
     # that same disagreement into the evidence for a relabel.
     class_counts: dict = field(default_factory=dict)
-    # Attribute evidence (R07 attribute-on-identity): a same-family,
+    # Attribute evidence (attribute-on-identity): a same-family,
     # more specific label seen on this landmark ("person wearing a green
     # shirt" on a `person`), keyed by the distinct detections behind it
     # ((memory object id, observation stamp) pairs, as for the promotion
@@ -169,7 +169,7 @@ CLASS_COLORS = {
     "person":           ColorRGBA(r=0.2, g=0.8, b=0.2, a=0.9),
     "bench":            ColorRGBA(r=0.8, g=0.6, b=0.2, a=0.9),
     "stop sign":        ColorRGBA(r=0.9, g=0.1, b=0.1, a=0.9),
-    # LocateAnything registry classes (R07)
+    # LocateAnything registry classes
     "bookshelf":        ColorRGBA(r=0.85, g=0.45, b=0.1, a=0.9),
     "trash can":        ColorRGBA(r=0.1, g=0.5, b=0.9, a=0.9),
     "traffic cone":     ColorRGBA(r=1.0, g=0.55, b=0.0, a=0.9),
@@ -457,7 +457,7 @@ def labels_same_family(a, b):
     """True when one label's tokens are a subset of the other's.
 
     "person" vs "person wearing a green shirt" describe the SAME object
-    at different specificity — not a labeling conflict. R05 A3 measured
+    at different specificity — not a labeling conflict. A test run measured
     what happens without this: the default profile maps the centre
     person as `person`, and every observation of the injected search
     expression then landed inside that landmark's evidence radius and
@@ -511,17 +511,17 @@ def should_relabel(class_counts, current_class, relabel_ratio,
 def promotion_ready(obs_count, distinct_count, min_obs, min_distinct):
     """Pure rule: may a candidate with these counts become a landmark?
 
-    Both must hold: `obs_count` reached the class threshold (the R05
+    Both must hold: `obs_count` reached the class threshold (the
     thresholds, tuned on the stacked 1 Hz republish counts), AND the
     observations behind it come from at least `min_distinct` distinct
     (memory object id, observation stamp) pairs, i.e. distinct
-    detections. Measured (R07 smoke, +214 s): two mislabelled
+    detections. Measured (test run, +214 s): two mislabelled
     "trash can" frames on the green-shirt person became two memory
     objects, each republished 4x onto the same map point -> n=8 in 4 s
     from 2 real detections, promoted, and blocked the true person for
     65 s until relabel. A real object seen from a moving robot
-    accumulates distinct stamps at the detector's request rate (bag_ab
-    barrier: 14 obs from 7 stamps), so 3 costs it nothing.
+    accumulates distinct stamps at the detector's request rate (replayed
+    bag, barrier: 14 obs from 7 stamps), so 3 costs it nothing.
     """
     return obs_count >= min_obs and distinct_count >= min_distinct
 
@@ -548,13 +548,13 @@ class SemanticMapMemoryNode(Node):
         self.declare_parameter("map_topic", "/map")
         self.declare_parameter("target_frame", "map")
         self.declare_parameter("tf_timeout", 0.3)
-        # R07 memory TF fix: transform each observation with the
+        # Memory TF fix: transform each observation with the
         # base_link->map transform AT ITS OWN header stamp (the source
         # image time, carried through the localizer and
         # semantic_memory_node) instead of the latest transform
         # (Time(0) = the robot's pose when the 1 Hz memory message
         # arrives, up to 1 s + the 5 s stale window after the
-        # measurement). R06a audit on a 61 s turning bag: on-object
+        # measurement). Audit on a 61 s turning bag: on-object
         # 82% -> 68% was the cost of Time(0). If the stamped lookup
         # fails within tf_stamp_timeout the old Time(0) lookup is used
         # and counted ([tf_match] line in the gate summary).
@@ -563,13 +563,13 @@ class SemanticMapMemoryNode(Node):
         self.declare_parameter("merge_distance", 0.8)
         self.declare_parameter("candidate_merge_distance", 0.8)
         self.declare_parameter("min_observations", 3)
-        # Promotion guard (R07): besides the per-class min_observations a
+        # Promotion guard: besides the per-class min_observations a
         # candidate needs observations from this many distinct
         # (memory object id, observation stamp) pairs. Applies to every
         # class, searched ones included (their threshold stays
         # search_min_observations). See promotion_ready().
         self.declare_parameter("min_distinct_observations", 3)
-        # Attribute-on-identity (R07): a more specific same-family label
+        # Attribute-on-identity: a more specific same-family label
         # ("person wearing a green shirt") observed within this distance
         # of an existing base-class landmark (`person`) is recorded as
         # attribute evidence on that landmark instead of growing its own
@@ -601,14 +601,14 @@ class SemanticMapMemoryNode(Node):
         self.declare_parameter("person_min_observations", 3)
         self.declare_parameter("bench_min_observations", 4)
         self.declare_parameter("stop_sign_min_observations", 5)
-        # ── Search link (Phase 2c) ───────────────────────────────────
+        # ── Search link ──────────────────────────────────────────────
         # While /active_search carries an expression, candidates of that
         # class promote at this threshold instead of the generic
         # fallback. Rationale: a searched class is being actively
         # confirmed by the coordinator (nav goal only after promotion),
         # and exploration may pass the object exactly once — the generic
-        # 8 was measured (R02b §5.1) to let sparse-view candidates
-        # expire at 7/8. 5 still filters the run-1 ghost pattern
+        # 8 was measured to let sparse-view candidates
+        # expire at 7/8. 5 still filters the early-run ghost pattern
         # (3 stray observations).
         self.declare_parameter("search_min_observations", 5)
         # Candidate expiry for the ACTIVE search class. The generic
@@ -616,14 +616,14 @@ class SemanticMapMemoryNode(Node):
         # mapping path's steady observation stream; a searched class is
         # observed only when exploration happens to face it, so its
         # observations arrive in drive-by bursts with long dry spells.
-        # Measured (R04 smoke 2, green shirt at the room centre —
+        # Measured (test run, green shirt at the room centre —
         # frontier exploration faces outward, away from the centre): the
         # true candidate hit n=4/5 TWICE and expired at age=45 s both
         # times; the search ended NOT FOUND after 260 s. This window
         # must bridge the gap between two exploration passes.
         self.declare_parameter("search_candidate_timeout", 150.0)
-        # Candidate merge radius for the ACTIVE search class. Measured
-        # (R04 G2): observations of the true green-shirt person cluster
+        # Candidate merge radius for the ACTIVE search class. Measured:
+        # observations of the true green-shirt person cluster
         # within d=0.00-0.25 (a person is a point obstacle — every ray
         # lands ON it), while MISLOCALIZED search boxes (ray passes the
         # distant target and hits whatever obstacle is nearer on that
@@ -636,7 +636,7 @@ class SemanticMapMemoryNode(Node):
         # Minimum range for observations of the ACTIVE search class.
         # Detect-mode forced choice is strongest at very close range: a
         # frame-filling close-up of ANY object tends to be labeled with
-        # whatever plausible category is on offer (R02c: a dark person
+        # whatever plausible category is on offer (measured: a dark person
         # at 0.7 m boxed "trash can" by every mode incl. /ground; the
         # bookshelf at 0.5 m boxed "traffic cone" 74 times in 89 s,
         # relabeling the landmark and sending the robot to the shelf).
@@ -647,7 +647,7 @@ class SemanticMapMemoryNode(Node):
         # vocabulary). A landmark whose class is neither here nor the
         # active search label cannot be relabeled away: its class has
         # zero observation opportunity, so the challenger's counts are
-        # one-sided evidence. Measured (R02c run A): 61 s after the
+        # one-sided evidence. Measured (test run): 61 s after the
         # bookshelf search ended, drive-by person mislocalizations hit
         # 1.5x the frozen bookshelf count and flipped the freshly
         # navigated-to landmark to person_3.
@@ -667,7 +667,7 @@ class SemanticMapMemoryNode(Node):
         # radii assume point-like objects; a physically LONG object needs
         # a radius that spans it, or its observations (localized wherever
         # each ray lands along the body) split into candidates that never
-        # individually reach the promotion threshold. Measured (R05 A1):
+        # individually reach the promotion threshold. Measured:
         # the 4.07 m jersey barrier under a 0.6 m search merge radius —
         # 70 s of search, plenty of boxes, zero promotions. An override
         # beats the search radius too: it reflects the object's physical
@@ -838,10 +838,10 @@ class SemanticMapMemoryNode(Node):
 
         The low search threshold is for classes the detector CANNOT see
         most of the time — open-vocabulary expressions outside the base
-        vocabulary, whose recall is the binding constraint (R05: 6 of 60
+        vocabulary, whose recall is the binding constraint (probe: 6 of 60
         frames carry a green-shirt box). A searched class that is in the
         base vocabulary is seen continuously and keeps its normal
-        threshold: measured (R05 B1) with 3 for everything, a bookshelf
+        threshold: measured with 3 for everything, a bookshelf
         search promoted a ghost on the blue-shirt person at n=3 and the
         robot drove to the person, while the real bookshelf reached n=8
         in the same run."""
@@ -1059,7 +1059,7 @@ class SemanticMapMemoryNode(Node):
                 obs_keys={obs_key}))
 
     def _transform_observation(self, pt_in, obs_stamp, label, obs_id):
-        """base_link -> map for one observation (R07 memory TF fix).
+        """base_link -> map for one observation (memory TF fix).
 
         Stamped lookup at the observation's own stamp (tf_stamp_timeout),
         falling back to the latest transform (Time(0), tf_timeout) when
@@ -1201,9 +1201,9 @@ class SemanticMapMemoryNode(Node):
         (the base class of an attribute expression: `person` for "person
         wearing a green shirt") within attribute_merge_distance_m.
 
-        Measured need (R07, 2026-09-17): with the same-family exemption in
+        Measured need (2026-09-17): with the same-family exemption in
         `_find_landmark_other_class` the expression grew its own candidate
-        next to the person it describes — take 2 ended with `person_2`
+        next to the person it describes — one recorded run ended with `person_2`
         n=44 and `person wearing a green shirt_0` n=14 on one spot, and an
         earlier search promoted the expression on the WRONG (white-shirt)
         person because it happened to collect 3 boxes there first. With
@@ -1227,10 +1227,10 @@ class SemanticMapMemoryNode(Node):
         best = None
         best_d = float("inf")
         # Active-search candidates use the tighter merge radius: true
-        # search targets cluster tightly, mislocalized boxes scatter (R04).
+        # search targets cluster tightly, mislocalized boxes scatter.
         # A per-class override beats both — it encodes the object's
         # physical extent (a 4 m barrier's true observations legitimately
-        # scatter along its whole body, R05 A1).
+        # scatter along its whole body).
         if label in self._class_merge:
             merge_d = self._class_merge[label]
         elif self._search_label is not None and label == self._search_label:
@@ -1290,8 +1290,8 @@ class SemanticMapMemoryNode(Node):
         if (lm.semantic_class not in self._observable
                 and lm.semantic_class != self._search_label):
             return
-        # Search-aware challenger threshold. Measured need (R02c smoke
-        # run 1): with the searched class absent from the mapping
+        # Search-aware challenger threshold. Measured need (test
+        # run): with the searched class absent from the mapping
         # vocabulary until injection, another class (person) promotes a
         # landmark AT the target first, and the target's own
         # observations all land here as cross evidence — relabel is the
@@ -1361,7 +1361,7 @@ class SemanticMapMemoryNode(Node):
 
         def _tout(c):
             # Active-search candidates get the longer window: their
-            # observations arrive in drive-by bursts (R04).
+            # observations arrive in drive-by bursts.
             if self._search_label is not None and \
                     c.semantic_class == self._search_label:
                 return self._search_cand_tout

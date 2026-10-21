@@ -45,7 +45,7 @@ def test_garbage_and_empty_text():
 # ── parse_labeled_boxes (detect-mode grouped output) ─────────────────────
 
 def test_labeled_groups_from_detect_output():
-    # Shape taken from a real R01 §2.3 detect() answer: per-category
+    # Shape taken from a real detect() answer: per-category
     # groups, one category cross-listed, one honest None.
     text = (
         "<ref>armchair</ref><box><0><0><270><623></box>"

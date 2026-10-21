@@ -10,8 +10,9 @@
 #   * detector_label here is a LocateAnything detect-vocabulary word,
 #     NOT a COCO class. The la_detector_node vocabulary and this file
 #     must list the same strings — the label a landmark is stored
-#     under is exactly the vocabulary word (词表即真理, R01 §5.5).
-#   * Per the Phase-2b decision, only classes that physically exist in
+#     under is exactly the vocabulary word (the vocabulary is the
+#     ground truth).
+#   * By design, only classes that physically exist in
 #     warehouse_models_person.world are listed. bench / stop sign are
 #     not in that world and are therefore absent.
 #
@@ -27,7 +28,7 @@ semantic_targets:
     enabled:         true
     notes: >
       Same as the YOLO-era entry. Baseline regression target
-      ("go to person" must keep working, R02a §2.5).
+      ("go to person" must keep working).
 
   - semantic_name:   "bookshelf"
     detector_label:  "bookshelf"
@@ -61,11 +62,11 @@ semantic_targets:
     gazebo_model:    "jersey_barrier"
     enabled:         true
     notes: >
-      R05: jersey barrier along the west wall (4.07 m long). Not a
+      Jersey barrier along the west wall (4.07 m long). Not a
       COCO class. Reached via the "traffic barrier" / "jersey
       barrier" / "barrier" phrase aliases in query_core.
       detector_label is "concrete barrier", NOT "traffic barrier":
-      offline probe (reports/R05_probe/) got 0/60 frames with
-      "traffic barrier" but correct boxes with "concrete barrier" /
-      "jersey barrier" / "barrier" — 词表即真理 cuts both ways, the
-      label must be a phrase the model actually grounds.
+      an offline probe got 0/60 frames with "traffic barrier" but
+      correct boxes with "concrete barrier" / "jersey barrier" /
+      "barrier" — the label must be a phrase the model actually
+      grounds.

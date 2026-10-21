@@ -28,7 +28,7 @@ class MemoryObject:
     """Lightweight mirror of one Detection3D from the memory topic.
 
     `attributes`: extra hypotheses the map memory attaches to a landmark
-    (R07 attribute-on-identity): label -> number of distinct detections
+    (attribute-on-identity): label -> number of distinct detections
     of that label seen on this object, e.g. {"person wearing a green
     shirt": 5.0} on `person_2`.
     """
@@ -111,17 +111,16 @@ _FILLER = frozenset({
 # "person number 3", "person no 5"). Skipped while scanning for the index.
 _INDEX_FILLER = frozenset({"number", "no", "num"})
 
-# ── Open-vocabulary expression extraction (Phase 2c search link) ──────────
+# ── Open-vocabulary expression extraction (search link) ───────────────────
 #
 # Words that may LEAD a navigation command before the target expression
 # starts. Deliberately a separate set from _FILLER: these are only
 # stripped from the FRONT of the command, so interior words of the
 # expression survive ("go to the box on the armchair" keeps its interior
 # "the"/"on"). The articles are in this set on purpose — stripping the
-# LEADING article is the de-articling rule the R02b experiment-d retrial
-# measured (leading "the" made /detect expression output unstable;
-# re-verified live on person-world frames in R02c §2.1 before this
-# shipped).
+# LEADING article is a measured de-articling rule (a leading "the" made
+# /detect expression output unstable; re-verified live on person-world
+# frames before this shipped).
 _ARTICLES = frozenset({"the", "a", "an"})
 _COMMAND_PREFIX = frozenset({
     "go", "to", "please", "navigate", "approach", "find", "me", "take",
@@ -165,7 +164,7 @@ def extract_expression(text: str) -> Optional[str]:
     return expression or None
 
 
-# Wording the detector is known to ground (R05 probe): "person wearing a
+# Wording the detector is known to ground (offline probe): "person wearing a
 # <colour> shirt". Users type the same idea many ways ("person ware green
 # T-shirt", "person in a red top"); the model grounds NONE of those (0
 # boxes in 138 s on 2026-09-17 for "person ware green t shirt"), so the
@@ -197,7 +196,7 @@ def attribute_expression(
     semantic_name: str,
     detector_label: str,
 ) -> Optional[str]:
-    """Detect an attribute-qualified registry-class command (R04).
+    """Detect an attribute-qualified registry-class command.
 
     `parse_command` matches on single tokens, so "find the person wearing
     a green shirt" resolves to the registry class `person` — and a search
@@ -351,7 +350,7 @@ def select_by_attribute(
     Ties go to the nearest object. None when no object has at least
     `min_count` distinct detections of the label. This is how "person
     wearing a green shirt" resolves to `person_2` once the map memory has
-    attached the expression to that person's identity (R07): the person
+    attached the expression to that person's identity: the person
     landmark is the object, the expression is evidence on it.
     """
     hits = [o for o in objects if o.attributes.get(label, 0) >= min_count]

@@ -2,12 +2,12 @@
 # send_command.sh — publish /user_command with receipt verification.
 # Run on the HOST; it exec's into the tb3-semantic-nav-sim-1 container.
 #
-# `ros2 topic pub --once` intermittently loses the first message (known
-# since the August runbook). Instead of blind double-sends (which the
+# `ros2 topic pub --once` intermittently loses the first message (a
+# long-known issue). Instead of blind double-sends (which the
 # preemption path would treat as two commands), publish once, then check
 # the stack log for the coordinator's "User command:" receipt; retry up
 # to 3 times. LOG is the host path of the file the stack launch is
-# tee'ing into (see docs/la_runbook.md §4).
+# tee'ing into.
 #
 # Usage: ./scripts/send_command.sh "go to the trash can" /path/to/stack.log
 set -u

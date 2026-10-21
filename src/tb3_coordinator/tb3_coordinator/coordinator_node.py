@@ -25,7 +25,7 @@ State model
       │        SEMANTIC_QUERYING (re-query, memory now hits)      │
       └──(resume delay, from TARGET_REACHED / TARGET_FAILED)──────┘
 
-Search link (Phase 2c): a query whose class has no landmark yet comes
+Search link: a query whose class has no landmark yet comes
 back with search_suggested. The coordinator then injects the expression
 into the detect vocabulary (latched /active_search), re-enables
 exploration, and watches the landmark topic for a promoted landmark of
@@ -37,7 +37,7 @@ state, then it is cleared — the landmark persists. Exploration complete
 (latched /exploration_complete from goal_assignment_node) with no
 landmark → explicit NOT FOUND.
 
-Preemption (Phase 2c, R02b unresolved #3): a user command that arrives
+Preemption: a user command that arrives
 while a Nav2 goal is in flight is queued, the goal is cancelled, and
 the command is dispatched only when the old goal reports a terminal
 state — its ABORTED/CANCELED result never bleeds into TARGET_FAILED
@@ -118,10 +118,10 @@ class CoordinatorNode(Node):
         # "idle": start standing still, exploration off, and wait for the
         # first /user_command (a query the memory cannot answer enables
         # exploration through the search path; a query it can answer
-        # navigates directly). "exploring": the pre-R07 behaviour — map
+        # navigates directly). "exploring": the old behaviour — map
         # from boot, accept commands on the way.
         self.declare_parameter("start_mode", "idle")
-        # R04 demo shape: after a navigation terminal state (TARGET_REACHED
+        # Demo shape: after a navigation terminal state (TARGET_REACHED
         # or TARGET NOT FOUND) go to IDLE and hold position instead of
         # auto-resuming exploration. Takes precedence over
         # auto_resume_exploration; set false to restore the old behavior.
@@ -131,7 +131,7 @@ class CoordinatorNode(Node):
         self.declare_parameter("enable_perception_sweep", True)
         self.declare_parameter("sweep_angular_vel", 0.4)
         self.declare_parameter("sweep_duration_sec", 18.0)
-        # ── Search link (Phase 2c) ────────────────────────────────────
+        # ── Search link ───────────────────────────────────────────────
         self.declare_parameter("active_search_topic", "/active_search")
         self.declare_parameter("landmark_topic",
                                "/semantic_map_memory_node/landmark_objects")
@@ -143,11 +143,11 @@ class CoordinatorNode(Node):
         # target from the current pose when the map was already fully
         # explored before the search began.
         self.declare_parameter("search_grace_sec", 15.0)
-        # ── Search patrol (R05) ──────────────────────────────────────
+        # ── Search patrol ────────────────────────────────────────────
         # Frontier exploration finishes when the MAP is complete, which
         # is not the same as having LOOKED at everything: the frontier
         # goals always face outward, so objects in the interior are only
-        # ever seen in passing. Measured (R05 A1/A2): once exploration
+        # ever seen in passing. Measured: once exploration
         # completed (~400 s), every later search died at the grace
         # window with the robot standing still — the green-shirt
         # candidate sat at n=4/5, 0.05 m from the true person, and
@@ -170,13 +170,13 @@ class CoordinatorNode(Node):
         # result callback never arrives, dispatch the queued command
         # anyway after this long.
         self.declare_parameter("preempt_watchdog_sec", 5.0)
-        # Search FOUND through attribute evidence (R07): a landmark whose
+        # Search FOUND through attribute evidence: a landmark whose
         # extra hypotheses carry the searched expression with at least
         # this many distinct detections counts as found (the map memory
         # attaches "person wearing a green shirt" to the `person`
         # landmark it was seen on instead of promoting a second one).
         self.declare_parameter("search_attribute_min_count", 2)
-        # HUD (R07): last command + current state drawn in RViz as two
+        # HUD: last command + current state drawn in RViz as two
         # text lines on a dark slab at a fixed map position — the empty
         # band above the room in la_demo.rviz (TopDownOrtho, 55 px/m).
         self.declare_parameter("hud_enabled", True)
@@ -453,7 +453,7 @@ class CoordinatorNode(Node):
         if self._search_label is not None:
             self._clear_search("preempted by new command")
 
-        # ── Preemption (R02b unresolved #3) ──────────────────────────────
+        # ── Preemption ───────────────────────────────────────────────────
         # Never race a new goal against an in-flight one: queue the
         # command, cancel the goal, and dispatch when its terminal result
         # arrives (_nav_result_cb) or the watchdog fires.
@@ -513,7 +513,7 @@ class CoordinatorNode(Node):
             self._publish_status("query failed: %s" % msg.status_message)
             self._schedule_resume()
 
-    # ── Search link (Phase 2c) ────────────────────────────────────────────
+    # ── Search link ───────────────────────────────────────────────────────
 
     def _publish_active_search(self, label: str) -> None:
         msg = String()

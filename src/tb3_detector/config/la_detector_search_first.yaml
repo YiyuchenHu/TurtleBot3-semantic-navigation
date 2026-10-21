@@ -1,7 +1,7 @@
 # ============================================================
-# tb3_detector — la_detector_node, SEARCH-FIRST profile (R04 demo shape)
+# tb3_detector — la_detector_node, SEARCH-FIRST profile (demo shape)
 # ============================================================
-# The R04 default, preserved verbatim when R05 made map-and-search the
+# The earlier default, preserved verbatim when map-and-search became the
 # default (la_detector.yaml): base vocabulary EMPTY, so NOTHING is mapped
 # during exploration and every user command goes through the search link —
 # the query expression injected via /active_search is the only class that
@@ -25,10 +25,10 @@ la_detector_node:
     # Coverage categories (requested, filtered on, NEVER published).
     # With the empty vocabulary EVERY request is coverage-driven:
     #   * the four physical world classes keep the geometric safety nets
-    #     (occlusion filter, same-object veto) sighted — R02c smoke run 1;
+    #     (occlusion filter, same-object veto) sighted (measured in a test run);
     #   * the shirt-color person expressions are the correct alternatives
     #     that let a color-attribute search say "no" instead of
-    #     force-matching the wrong person (R04 probe, 12/12 with them,
+    #     force-matching the wrong person (offline probe, 12/12 with them,
     #     0/6 negatives without).
     coverage_categories: ["person", "bookshelf", "trash can", "traffic cone",
                           "concrete barrier",

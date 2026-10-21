@@ -21,7 +21,7 @@ Exposes a grounding model to the ROS stack over JSON:
     repetition_penalty / max_new_tokens / max_side — see
     backends/locate_anything.py DEFAULT_OPTIONS). The server-wide
     defaults are set by CLI flags and reported by GET /health. "timing"
-    is the per-stage breakdown of the last generate (R06a profiling).
+    is the per-stage breakdown of the last generate (for profiling).
 
 Usage:
     python3 server.py --backend locate_anything --port 8801   # GPU box
@@ -127,8 +127,8 @@ class GroundingHandler(BaseHTTPRequestHandler):
             return
         latency_ms = (time.monotonic() - t0) * 1000.0
         tm = getattr(self.backend, "last_timing", {}) or {}
-        # One line per request with the stage split — the R06a smoke
-        # reads these back for the latency distribution.
+        # One line per request with the stage split — latency profiling
+        # reads these back for the distribution.
         print("[timing] %s cats=%d total=%.0f vision=%.0f prefill=%.0f "
               "decode=%.0f steps=%s boxes=%d%s"
               % (path, len(categories) if path == "/detect" else 1, latency_ms,
@@ -195,7 +195,7 @@ def main() -> None:
                          "(Turing has no native bf16).")
     ap.add_argument("--model", default=None,
                     help="override HF model id for locate_anything")
-    # locate_anything generation defaults (R06a). Each is also overridable
+    # locate_anything generation defaults. Each is also overridable
     # per request through the "options" payload field.
     # Defaults come from the environment so compose can set them without
     # an image rebuild (GROUNDING_GENERATION_MODE / GROUNDING_SAMPLING /

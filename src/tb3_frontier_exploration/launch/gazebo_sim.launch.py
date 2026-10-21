@@ -1,7 +1,7 @@
 """
 gazebo_sim.launch.py — Gazebo Classic + TurtleBot3 only (no Nav2, no
-perception, no exploration). Layer 1 of the manual bring-up in
-docs/la_runbook.md §4.1; everything else is started per node by hand.
+perception, no exploration). Layer 1 of the per-layer manual
+bring-up; everything else is started per layer or per node by hand.
 
     ros2 launch tb3_frontier_exploration gazebo_sim.launch.py
     ros2 launch tb3_frontier_exploration gazebo_sim.launch.py world:=warehouse_models x_pose:=-1.2 y_pose:=-1.2

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-test_attributes.py — attribute-on-identity bookkeeping (R07).
+test_attributes.py — attribute-on-identity bookkeeping.
 
 Pure layer: `Landmark.attr_keys` / `attr_count` / `top_attribute`, the
 marker label, and the strict token-subset rule `_find_family_landmark`

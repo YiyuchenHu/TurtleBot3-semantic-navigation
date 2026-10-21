@@ -1,6 +1,7 @@
 """NVIDIA LocateAnything-3B backend: image + phrase -> bounding boxes.
 
-Needs an Ampere+ NVIDIA GPU, Linux, ~12 GB VRAM, transformers==4.57.1.
+Needs an NVIDIA GPU (Ampere+ for native bfloat16), Linux, ~13 GB of GPU
+memory as measured on an RTX 5090, transformers==4.57.1.
 Weights are licensed for non-commercial research use only. Inference
 follows the model card at https://huggingface.co/nvidia/LocateAnything-3B.
 """
@@ -30,7 +31,7 @@ _PROMPT_TEMPLATE = ("Locate all the instances that match the following "
                     "description: {query}.")
 # Model-card detect() template: category-list detection, categories joined
 # with the literal `</c>` separator. Wording verbatim from the model card
-# (including "matches"); validated against this checkpoint in R01 §2.3.
+# (including "matches"); validated against this checkpoint.
 _DETECT_TEMPLATE = ("Locate all the instances that matches the following "
                     "description: {categories}.")
 _CATEGORY_SEP = "</c>"
@@ -82,13 +83,13 @@ def resolve_dtype(name: str, device: str):
 
 # Generation options and their defaults. Every entry can be set at server
 # start (CLI) and overridden per request (`"options": {...}` in the
-# /detect and /ground payloads) so the R06a profiler can sweep them
+# /detect and /ground payloads) so a profiler can sweep them
 # without restarting the model.
 #   generation_mode : "hybrid" (MTP with AR fallback, model-card default),
 #                     "fast" (MTP only), "slow" (pure AR)
 #   do_sample       : model-card Worker samples (T=0.7, top_p 0.9); False
 #                     = greedy: same T/top_p sharpening of the logits, but
-#                     argmax instead of a draw — deterministic (R06a).
+#                     argmax instead of a draw — deterministic.
 #                     NOT temperature=0: the remote code's MTP box-frame
 #                     validator (is_valid_box_frame / decode_bbox_avg)
 #                     tests ABSOLUTE probabilities (0.6/0.7/0.2) that are
@@ -96,14 +97,14 @@ def resolve_dtype(name: str, device: str):
 #                     the scaling is skipped, every frame fails the
 #                     check, and decoding falls into the AR loop that
 #                     emits 341 repeated <box> tokens (6 s/frame,
-#                     measured R06a).
+#                     measured).
 #   max_new_tokens  : hard cap on generated tokens (per-request the caller
 #                     can tighten it from the category count)
 #   max_side        : resize the input so its longer side is <= this many
 #                     px before the processor (0 = native). Boxes are
 #                     always returned in the ORIGINAL pixel space.
 #   cap_retry_sample: greedy can lock into a deterministic repeat loop on
-#                     rare frames (R06a replay: 3 of ~400 requests ran to
+#                     rare frames (in a replay, 3 of ~400 requests ran to
 #                     the token cap with 0-1 boxes); when a greedy call
 #                     hits max_new_tokens, retry once with sampling.
 DEFAULT_OPTIONS = dict(generation_mode="hybrid", do_sample=True,
@@ -128,7 +129,7 @@ class LocateAnythingBackend:
         self._tokenizer = None
         self._processor = None
         self._attn = {}            # attention implementations actually in use
-        # Per-forward timing of the language model (R06a profiling): the
+        # Per-forward timing of the language model (for profiling): the
         # first forward of a generate() call is the prefill, the rest are
         # decode steps. Filled by a forward hook, read by _generate.
         self._lm_calls: list[float] = []
@@ -187,7 +188,7 @@ class LocateAnythingBackend:
     def _warm_up(self) -> None:
         """One throwaway detect on a synthetic 640x480 frame: the first
         generate after load pays CUDA kernel/allocator warm-up (~600 ms
-        vs ~260 ms warm, R06a) and it should not land on a real frame."""
+        vs ~260 ms warm) and it should not land on a real frame."""
         try:
             from PIL import Image
             buf = io.BytesIO()

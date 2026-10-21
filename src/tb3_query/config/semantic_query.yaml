@@ -20,7 +20,7 @@ semantic_query_node:
     # tb3_frontier_exploration package share.
     semantic_targets_file: ""
 
-    # ── Attribute resolution (R07) ────────────────────────
+    # ── Attribute resolution ──────────────────────────────
     # An expression that is no landmark's class still resolves when a
     # landmark carries it as an attribute (results[1:] of
     # landmark_objects) with at least this many distinct detections;

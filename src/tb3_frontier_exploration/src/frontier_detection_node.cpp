@@ -335,11 +335,7 @@ private:
 
   /**
    * @brief Sample the latest global costmap at world coordinates and expose the grid indices used.
-   *cd ~/TurtleBot3-semantic-navigation
-source /opt/ros/humble/setup.bash
-source install/setup.bash
-
-ros2 launch tb3_frontier_exploration exploration.launch.py use_sim_time:=true
+   *
    * @param wx World x (meters) in the costmap’s frame.
    * @param wy World y (meters) in the costmap’s frame.
    * @param out_mx Output: computed grid column before clamping (may be outside [0,width) if OOB).

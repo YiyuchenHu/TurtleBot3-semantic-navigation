@@ -1,17 +1,17 @@
 # ============================================================
-# tb3_detector — la_detector_node ACCEPTANCE PROFILE (R02c)
+# tb3_detector — la_detector_node ACCEPTANCE PROFILE (person only)
 # ============================================================
 # Same node, same parameters as la_detector.yaml, but the vocabulary is
 # shrunk to ["person"]: bookshelf, trash can and traffic cone become
 # OPEN-VOCABULARY targets that the search link must discover on demand
 # ("go to the trash can" → Query MISS → /active_search injection →
 # SEARCHING → promotion at n=5 → navigation). This is the exact
-# configuration the R02c end-to-end search acceptance ran under.
+# configuration the end-to-end search acceptance test ran under.
 #
 # Use it to DEMO the search link; use la_detector.yaml (4-class
 # default) for everyday runs where all objects map during exploration.
 #
-# Select at launch time (see docs/la_runbook.md §7):
+# Select at launch time:
 #   ros2 launch tb3_coordinator full_semantic_nav_la.launch.py \
 #     detector_config:=/home/ubuntu/ws/src/tb3_detector/config/la_detector_person_only.yaml
 #
@@ -33,7 +33,7 @@ la_detector_node:
     # With the shrunk vocabulary these are NOT inert (unlike in the
     # 4-class default): they keep the occlusion filter and same-object
     # veto sighted on the three world objects. Never disable them in
-    # this profile — R02c smoke run 1 measured what happens (fake
+    # this profile — a test run measured what happens (fake
     # person landmarks at the trash can and bookshelf, search navigated
     # to the wrong object).
     coverage_categories: ["bookshelf", "trash can", "traffic cone"]

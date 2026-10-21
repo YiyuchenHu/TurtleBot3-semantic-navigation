@@ -74,7 +74,7 @@ class SemanticQueryNode(Node):
         self.declare_parameter("status_topic", "~/query_status")
         self.declare_parameter("semantic_targets_file", "")
         self.declare_parameter("output_frame", "base_link")
-        # Attribute resolution (R07): an expression that is not any
+        # Attribute resolution: an expression that is not any
         # landmark's class still resolves when a landmark carries it as an
         # attribute with at least this many distinct detections.
         self.declare_parameter("attribute_min_count", 2)
@@ -153,7 +153,7 @@ class SemanticQueryNode(Node):
         parsed = parse_command(raw, self._known_targets)
 
         if parsed is None:
-            # ── Open-vocabulary path (Phase 2c search link) ──────────────
+            # ── Open-vocabulary path (search link) ───────────────────────
             # Not a registry target. If the text still reads as a
             # navigation command, the remainder becomes a free-form
             # expression: resolve it against memory by literal label
@@ -188,7 +188,7 @@ class SemanticQueryNode(Node):
                 )
                 return
             desired_index = parsed.desired_index
-            # ── Attribute-qualified class (R04) ──────────────────────────
+            # ── Attribute-qualified class ────────────────────────────────
             # "find the person wearing a green shirt" token-matches the
             # registry class `person`, but injecting plain "person" would
             # stop the search at ANY person. Commands with attribute
@@ -224,7 +224,7 @@ class SemanticQueryNode(Node):
             attribute_min_count=int(self.get_parameter("attribute_min_count").value),
         )
 
-        # ── Search suggestion (Phase 2c) ─────────────────────────────────
+        # ── Search suggestion ────────────────────────────────────────────
         # The class has NO landmark at all and no specific index was
         # requested → the coordinator can inject `detector_label` into the
         # detect vocabulary and explore. With an index ("go to person 3")

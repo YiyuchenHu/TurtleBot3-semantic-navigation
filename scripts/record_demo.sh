@@ -1,8 +1,8 @@
 #!/bin/bash
-# record_demo.sh — R05 recording pipeline (NVENC, native-1080p region).
+# record_demo.sh — demo recording pipeline (NVENC, native-1080p region).
 #
-# Why this exists (R05 step 1 findings, full numbers in R05 report):
-#   * The R04 pipeline (6144x3456 full-screen grab -> CPU scale -> libx264)
+# Why this exists (measured findings):
+#   * The earlier pipeline (6144x3456 full-screen grab -> CPU scale -> libx264)
 #     produced ~4 fps of DISTINCT frames. The encoder was innocent: gzclient
 #     itself repaints at ~4-5 fps when its window is 3072x3406 (~10 MP) —
 #     repaint rate scales inversely with window area (~45 MP/s budget).
@@ -10,8 +10,8 @@
 #   * Fix = small windows tiling a native 1920x1080 region (no scaling at
 #     all) + GPU encode. Measured 26-29 fps effective during navigation.
 #   * x11grab records the TOP-MOST pixels of the region: any gap between
-#     windows leaks the desktop into the video (R02c/R04 privacy incidents;
-#     R05 caught two more during layout bring-up). The `arrange` step must
+#     windows leaks the desktop into the video (this happened in several
+#     earlier recordings). The `arrange` step must
 #     end with the three windows EXACTLY tiling the region, and `check`
 #     must be run on every finished recording.
 #
@@ -93,7 +93,7 @@ check() {  # post-recording privacy scan: 15 s frames to eyeball + automatic int
   mkdir -p "$outdir"
   ffmpeg -loglevel error -y -i "$vid" -vf fps=1/15 "$outdir/scan_%03d.jpg"
   echo "frames in $outdir — eyeball every one before publishing"
-  # R07 take 2 lesson: a foreign window over the Gazebo column changes the
+  # Lesson from a past take: a foreign window over the Gazebo column changes the
   # column's mean luminance by ~70 (median ~125). Per-second YAVG of the
   # Gazebo column, seconds more than 12 from the median = suspects; the
   # 15 s frame grid above missed a 3 s one. Prints [start,end] runs.

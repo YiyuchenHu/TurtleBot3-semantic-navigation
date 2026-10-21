@@ -1,6 +1,6 @@
 """
 perception_la.launch.py — the LocateAnything perception chain, 4 nodes
-(layer 3 of docs/la_runbook.md §4.3). Nothing else: no Gazebo, no Nav2,
+(layer 3 of the per-layer manual bring-up). Nothing else: no Gazebo, no Nav2,
 no exploration, no coordinator.
 
     ros2 launch tb3_coordinator perception_la.launch.py

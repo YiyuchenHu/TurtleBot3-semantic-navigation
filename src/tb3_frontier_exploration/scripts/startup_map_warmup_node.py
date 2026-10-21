@@ -5,7 +5,7 @@ One-shot startup scan: pure rotation on cmd_vel to seed SLAM / frontier quality 
 Sequence: delay → turn left ~45° → pause → return to heading → pause → turn right ~45° → pause → return.
 Then publishes latched std_msgs/Bool true on exploration_warmup_complete (or param topic).
 
-R07: with wait_for_exploration_enabled (default true) the delay only starts
+With wait_for_exploration_enabled (default true) the delay only starts
 once /exploration_enabled has been seen true (latched), so the robot stands
 still until the coordinator's first search command enables exploration.
 """

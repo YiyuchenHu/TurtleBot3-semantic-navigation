@@ -1,10 +1,10 @@
 """
 full_semantic_nav_la.launch.py — Full semantic navigation stack with
-LocateAnything as the ONLY perception model (Phase 2b mapping path).
+LocateAnything as the ONLY perception model (mapping path).
 
 Identical to full_semantic_nav.launch.py except:
-  1. The YOLO detector is NOT started (its code stays in the repo,
-     ground rule 7). la_detector_node produces /detector_node/detections
+  1. The YOLO detector is NOT started (its code stays in the repo).
+     la_detector_node produces /detector_node/detections
      instead, by calling the grounding container's POST /detect
      (fixed vocabulary, config/la_detector.yaml).
   2. semantic_query_node loads semantic_targets_la.yaml — the registry
@@ -22,7 +22,7 @@ Usage:
     ros2 launch tb3_coordinator full_semantic_nav_la.launch.py
     ros2 topic pub --once /user_command std_msgs/String "data: 'go to the bookshelf'"
 
-R07 defaults: spawn (1, -1) for the person world, stock Humble Nav2
+Defaults: spawn (1, -1) for the person world, stock Humble Nav2
 parameters (nav2_params:=... to override), warm-up scan 0.4 rad/s.
 """
 
@@ -50,12 +50,12 @@ from launch_ros.substitutions import FindPackageShare
 WORLD_PRESETS = {
     "warehouse_models_person": {
         "file":      "warehouse_models_person.world",
-        # R07: (1, -1) instead of the baseline's (-1.5, 0). The R05
-        # jersey barrier sits at x=-2.55 along the west wall, 1.05 m
-        # from (-1.5, 0) — inside the runbook §9 ">= 1.2 m from any
-        # obstacle" rule; the R06a smoke run spent its first 100 s
-        # with goal_assignment reporting "No low-cost sample". (1, -1)
-        # is the start R05 B1 (the reference 4-command run) used:
+        # (1, -1) instead of the baseline's (-1.5, 0). The jersey
+        # barrier sits at x=-2.55 along the west wall, 1.05 m from
+        # (-1.5, 0) — closer than the ">= 1.2 m from any obstacle"
+        # spawn rule; a test run spent its first 100 s with
+        # goal_assignment reporting "No low-cost sample". (1, -1) is
+        # the start the reference 4-command run used:
         # 1.41 m from the centre person, 1.41 m from the SE person
         # (2, -2), 1.72 m from the cone (2.4, 0), 1.64 m from the
         # trash can (0, -2.3), 2 m from the east/south walls.
@@ -168,11 +168,10 @@ def generate_launch_description():
 
     # ── 2. Nav2 + SLAM (identical to baseline) ──────────────────────────
     dummy_map = os.path.join(pkg_nav2, "maps", "turtlebot3_world.yaml")
-    # R07: back to the stock Humble parameters (the R05 configuration,
-    # same file as the baseline launch). R06a step 7 had switched to a
-    # 0.3 rad/s angular-limit copy; its one smoke run wedged at the
-    # centre person (676 "No valid trajectories" vs 0-2 in the R05
-    # logs) and n=1 could not clear the slower DWB sampling as a cause.
+    # Stock Humble parameters (same file as the baseline launch). An
+    # earlier version switched to a 0.3 rad/s angular-limit copy; its
+    # one test run wedged at the centre person (676 "No valid
+    # trajectories" vs 0-2 with the stock file) and n=1 could not clear the slower DWB sampling as a cause.
     # That file is kept as config/nav2_params_la_slow.yaml — pass it via
     # nav2_params:=<abs path> (plus warmup_angular_speed:=0.3) to try it.
     nav2 = IncludeLaunchDescription(
@@ -195,9 +194,9 @@ def generate_launch_description():
         PythonLaunchDescriptionSource(
             os.path.join(pkg_fe, "launch", "exploration.launch.py")
         ),
-        # R07: start-up rotation scan speed is a launch argument again
-        # (default 0.4 rad/s = the R05 value and exploration.launch.py's
-        # own default; R06a step 7 had pinned 0.3 here).
+        # Start-up rotation scan speed is a launch argument (default
+        # 0.4 rad/s = exploration.launch.py's own default; the slow-turn
+        # Nav2 variant pairs with 0.3).
         launch_arguments={
             "use_sim_time": use_sim_time,
             "warmup_angular_speed": LaunchConfiguration("warmup_angular_speed"),
@@ -208,13 +207,12 @@ def generate_launch_description():
     # THE difference from the baseline: la_detector_node instead of the
     # YOLO detector.launch.py include. Publishes on the same absolute
     # topics, so localizer/memory/RViz need no changes.
-    # detector_config selects the la_detector parameter profile
-    # (docs/la_runbook.md §7):
-    #   default → config/la_detector.yaml (R05 map-and-search: registry
+    # detector_config selects the la_detector parameter profile:
+    #   default → config/la_detector.yaml (map-and-search: registry
     #     classes + shirt-color expressions all map during exploration)
-    #   la_detector_search_first.yaml — R04 demo shape (empty vocabulary)
-    #   la_detector_four_class.yaml   — pre-R04 default
-    #   la_detector_person_only.yaml  — R02c acceptance demo
+    #   la_detector_search_first.yaml — search-first demo (empty vocabulary)
+    #   la_detector_four_class.yaml   — earlier 4-class default
+    #   la_detector_person_only.yaml  — person-only acceptance demo
     la_detector = Node(
         package="tb3_detector",
         executable="la_detector_node",
@@ -277,7 +275,7 @@ def generate_launch_description():
     )
 
     # ── 7. RViz ──────────────────────────────────────────────────────────
-    # rviz_config launch argument (R04): default is the recording layout
+    # rviz_config launch argument: default is the recording layout
     # la_demo.rviz (map view + large detector debug image, side panels
     # hidden); pass the absolute path of semantic_nav.rviz for the full
     # debugging layout.

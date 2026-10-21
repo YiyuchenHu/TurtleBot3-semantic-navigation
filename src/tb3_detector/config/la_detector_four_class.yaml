@@ -1,11 +1,10 @@
 # ============================================================
 # tb3_detector — la_detector_node FOUR-CLASS profile
 # ============================================================
-# The pre-R04 default (R02c wrap-up decision 5): the full 4-class
-# registry maps during exploration; searches only trigger for words
-# outside the vocabulary. Since R04 the DEFAULT profile is
-# la_detector.yaml (search-first, empty vocabulary); select this one
-# with the detector_config launch argument (docs/la_runbook.md §7).
+# An earlier default: the full 4-class registry maps during
+# exploration; searches only trigger for words outside the
+# vocabulary. The DEFAULT profile is now la_detector.yaml; select
+# this one with the detector_config launch argument.
 
 la_detector_node:
   ros__parameters:
@@ -17,24 +16,24 @@ la_detector_node:
 
     # ── Vocabulary ─────────────────────────────────────────
     # THE source of truth for what the mapping path can label
-    # (词表即真理, R01 §5.5). Every entry must:
-    #   * physically exist in the world (Phase-2b decision 3), and
+    # (the vocabulary is the ground truth). Every entry must:
+    #   * physically exist in the world, and
     #   * appear verbatim as a detector_label in semantic_targets_la.yaml
     #     (the query side resolves user commands against that file).
     # Order matters: it is the priority order for cross-class
     # deduplication (earlier wins).
     #
-    # Default (R02c wrap-up decision 5): the full 4-class registry —
+    # This profile: the full 4-class registry —
     # every world object maps during exploration, searches only trigger
     # for words outside this list (e.g. "go to the bicycle"). The
     # search link still works on top of it: the coordinator injects the
     # query expression via /active_search; the injected term is
     # prepended, i.e. top dedup priority.
     #
-    # The R02c acceptance profile (vocabulary shrunk to ["person"] so
+    # The person-only acceptance profile (vocabulary shrunk to ["person"] so
     # bookshelf / trash can / cone are open-vocabulary search targets)
     # lives in la_detector_person_only.yaml — select it with the
-    # detector_config launch argument (see docs/la_runbook.md §7).
+    # detector_config launch argument.
     vocabulary: ["person", "bookshelf", "trash can", "traffic cone"]
 
     # ── Search-link injection ──────────────────────────────
@@ -43,7 +42,7 @@ la_detector_node:
     active_search_topic: "/active_search"
 
     # ── Coverage categories (requested, filtered on, NEVER published) ──
-    # R02c smoke run 1 measured what shrinking the vocabulary does: with
+    # A test run measured what shrinking the vocabulary does: with
     # ["person"] alone the occlusion filter went blind to the three
     # world objects, a mislocalized box chain promoted a fake person at
     # the trash can and at the bookshelf, and the cone collected enough
@@ -59,7 +58,7 @@ la_detector_node:
     coverage_categories: ["bookshelf", "trash can", "traffic cone"]
 
     # ── Sampling ───────────────────────────────────────────
-    # Server-side detect is ~0.2-0.3 s/frame (R01 §5.7); 0.3 s keeps at
+    # Server-side detect is ~0.2-0.3 s/frame; 0.3 s keeps at
     # most ~3 requests/s and matches the YOLO node's effective rate.
     min_interval_sec: 0.3
     # Skip frames while the robot spins faster than this (rad/s, from
@@ -72,14 +71,14 @@ la_detector_node:
     # detection of another class (nearer = bottom edge >=8 px lower;
     # everything here stands on the floor). The planar localizer casts
     # the scan ray at the centre column, so such detections are
-    # guaranteed to be localized onto the occluder — run 1 measured the
+    # guaranteed to be localized onto the occluder — a test run had the
     # cone behind the centre person planting a fake "traffic cone"
-    # landmark on the person this way (R02b §4).
+    # landmark on the person this way.
     occlusion_filter: true
 
     # ── Cross-class dedup ──────────────────────────────────
     # The model can list one physical object under several vocabulary
-    # entries (R01 §2.3: armchair/chair cross-listing). Two boxes of
+    # entries (e.g. armchair/chair cross-listing). Two boxes of
     # DIFFERENT labels with IoU >= this are collapsed to the earlier
     # vocabulary entry.
     cross_class_iou: 0.8
