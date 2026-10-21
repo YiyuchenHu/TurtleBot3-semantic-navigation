@@ -1,0 +1,123 @@
+# ROS 2 Humble / Gazebo Classic sim stack + LocateAnything grounding
+# service (added in Phase 2b together with the ported grounding/ dir).
+#
+# Requires an NVIDIA GPU + the NVIDIA Container Toolkit on the host.
+# Every compose command takes BOTH files, in this order:
+#
+#   docker compose -f docker/compose.yaml -f docker/compose.local.yaml up -d
+#   docker compose -f docker/compose.yaml -f docker/compose.local.yaml exec sim bash
+#
+# compose.local.yaml carries the host-specific bits (X11 auth, NVIDIA EGL
+# vendor JSON); without it Gazebo falls back to llvmpipe software
+# rendering and gzclient cannot open a window.
+
+# Pin the compose project name to "docker" — the name the August 2026
+# stack got implicitly from its directory — so the volume keys below
+# resolve to the surviving docker_* volumes regardless of where compose
+# is invoked from.
+name: docker
+
+services:
+  sim:
+    build:
+      context: .
+      dockerfile: Dockerfile.sim
+    image: tb3-semantic-nav-sim
+    ports:
+      # Published by sim (not grounding) so the grounding container can
+      # later join with network_mode: "service:sim" and in-container
+      # nodes reach it at 127.0.0.1:8801. Loopback-only on the host.
+      - "127.0.0.1:8801:8801"
+    volumes:
+      - ..:/home/ubuntu/ws
+      # Colcon artifacts stay off the bind mount, in named volumes. NEW
+      # names (…_humble): the surviving docker_ws_build/install/log
+      # volumes hold Jazzy-era colcon output and are left untouched.
+      - ws_build_humble:/home/ubuntu/ws/build
+      - ws_install_humble:/home/ubuntu/ws/install
+      - ws_log_humble:/home/ubuntu/ws/log
+      # Best-view frames; reuses the surviving August volume (external).
+      - evidence:/home/ubuntu/.tb3_semantic_nav
+      # X11 socket for gzclient/RViz on the host display.
+      - /tmp/.X11-unix:/tmp/.X11-unix:ro
+      # gzclient window geometry for demo recording, kept in the repo so
+      # it survives container recreation (R02a decision 2). Mounted rw:
+      # gzclient rewrites it on exit, which is how adjusted geometry
+      # persists — an unwanted diff is a plain `git checkout` away.
+      - ./gazebo_gui.ini:/home/ubuntu/.gazebo/gui.ini
+    shm_size: "2gb"
+    environment:
+      - TURTLEBOT3_MODEL=waffle_pi
+      - DISPLAY=${DISPLAY:-:0}
+      # Avoid MIT-SHM across the container boundary (X clients sharing
+      # only the socket, not shared memory, misrender without this).
+      - QT_X11_NO_MITSHM=1
+    # Idle until exec'd into; the ROS stack is started explicitly with
+    # `docker compose exec sim ros2 launch …`.
+    command: ["sleep", "infinity"]
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              # `gpu` is the coarse capability compose understands; the
+              # graphics/display caps that GLX rendering needs come from
+              # NVIDIA_DRIVER_CAPABILITIES=all set in the image. Both are
+              # required.
+              capabilities: [gpu]
+
+  grounding:
+    build:
+      context: .
+      dockerfile: Dockerfile.grounding
+    image: tb3-semantic-nav-grounding
+    # Shares sim's netns: in-container ROS nodes reach the server at
+    # 127.0.0.1:8801, and the host does too because sim publishes the
+    # port loopback-only above.
+    network_mode: "service:sim"
+    volumes:
+      - ../grounding:/app
+      # LocateAnything-3B weights (~7 GB), already present in the
+      # surviving August volume — never re-fetched thanks to the
+      # offline switch below.
+      - hf_cache:/hf-cache
+    environment:
+      # Set to `mock` to fall back to the GPU-free HSV colour heuristic.
+      - GROUNDING_BACKEND=${GROUNDING_BACKEND:-locate_anything}
+      # Weights + pinned remote-code revision live in hf_cache; the VPN
+      # blocks container egress, and an online HF check would stall
+      # startup. Keep this on — and never clear the cache or change the
+      # model revision (R01 §5.10-7).
+      - HF_HUB_OFFLINE=1
+      # R06a: deterministic detection. Greedy = argmax with the model
+      # card's T/top_p sharpening kept (temperature 0 breaks this
+      # checkpoint's MTP decoder — see backends/locate_anything.py).
+      # la_detector_node sends its own per-request options anyway; these
+      # are the defaults for probes and /ground.
+      - GROUNDING_SAMPLING=greedy
+      - GROUNDING_GENERATION_MODE=fast
+    depends_on:
+      - sim
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+volumes:
+  ws_build_humble:
+  ws_install_humble:
+  ws_log_humble:
+  # Survivors of the August stack. Declared external so compose reuses
+  # them as-is and can never recreate them (project ground rule). On a
+  # fresh machine: docker volume create docker_evidence and
+  # docker_hf_cache.
+  evidence:
+    external: true
+    name: docker_evidence
+  hf_cache:
+    external: true
+    name: docker_hf_cache

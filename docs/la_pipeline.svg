@@ -1,0 +1,167 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1560 940" width="1560" height="940" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif">
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#1a1a1a"/>
+    </marker>
+    <style>
+      .panel { fill:#FBF3D5; stroke:#E6D58C; stroke-width:1.5; }
+      .hdr { font-size:17px; font-weight:700; fill:#1a1a1a; }
+      .box { fill:#E4E0F6; stroke:#5A46C8; stroke-width:1.6; }
+      .term { fill:#ffffff; stroke:#1a1a1a; stroke-width:1.6; }
+      .t { font-size:16px; fill:#111111; text-anchor:middle; }
+      .s { font-size:13px; fill:#555555; text-anchor:middle; }
+      .lbl { font-size:14px; fill:#1a1a1a; }
+      .ln { fill:none; stroke:#1a1a1a; stroke-width:1.6; }
+    </style>
+  </defs>
+
+  <rect width="1560" height="940" fill="#ffffff"/>
+
+  <text x="40" y="56" font-size="35" font-weight="700" fill="#111">LocateAnything-3B inside the TurtleBot3 semantic-navigation stack</text>
+  <text x="40" y="88" font-size="16" fill="#444">Command first, search on a miss: the robot waits for a command and explores only to find an object that is not on its map yet.</text>
+
+  <!-- panels -->
+  <rect class="panel" x="40" y="120" width="360" height="400"/>
+  <rect class="panel" x="420" y="120" width="340" height="400"/>
+  <rect class="panel" x="780" y="120" width="360" height="400"/>
+  <rect class="panel" x="1160" y="120" width="360" height="690"/>
+  <rect class="panel" x="40" y="580" width="1100" height="230"/>
+
+  <text class="hdr" x="56" y="146">① Query the map</text>
+  <text class="hdr" x="436" y="146">② Exploration (the search)</text>
+  <text class="hdr" x="796" y="146">③ Perception while exploring</text>
+  <text class="hdr" x="1176" y="146">④ Localization &amp; semantic memory</text>
+  <text class="hdr" x="56" y="606">⑤ Navigation</text>
+
+  <!-- loop: keep exploring (drawn first so boxes sit on top) -->
+  <path class="ln" d="M1470,694 H1540 V108 H722 V158" marker-end="url(#arr)"/>
+  <rect x="985" y="97" width="130" height="22" fill="#ffffff"/>
+  <text class="lbl" x="1050" y="113" text-anchor="middle">keep exploring</text>
+  <text class="lbl" x="1482" y="684">yes</text>
+
+  <!-- loop: next command -->
+  <path class="ln" d="M1010,718 V850 H8 V191 H88" marker-end="url(#arr)"/>
+  <rect x="455" y="839" width="290" height="22" fill="#ffffff"/>
+  <text class="lbl" x="600" y="855" text-anchor="middle">next command reuses the same memory</text>
+
+  <!-- P1 -->
+  <rect class="term" x="90" y="164" width="260" height="54" rx="27"/>
+  <text class="t" x="220" y="188">Command: go to X</text>
+  <text class="s" x="220" y="207">robot idle until a command arrives</text>
+  <path class="ln" d="M220,218 V256" marker-end="url(#arr)"/>
+
+  <polygon class="box" points="220,258 350,318 220,378 90,318"/>
+  <text class="t" x="220" y="313">X already a</text>
+  <text class="t" x="220" y="334">landmark?</text>
+
+  <path class="ln" d="M220,378 V418" marker-end="url(#arr)"/>
+  <text class="lbl" x="230" y="403">no</text>
+
+  <rect class="box" x="60" y="420" width="320" height="66" rx="8"/>
+  <text class="t" x="220" y="447">Search for X</text>
+  <text class="t" x="220" y="470" font-size="15">add X to the vocabulary, start exploring</text>
+
+  <!-- D1 yes -> approach -->
+  <path class="ln" d="M90,318 H24 V690 H298" marker-end="url(#arr)"/>
+  <text class="lbl" x="52" y="310">yes</text>
+  <text class="s" x="170" y="681">X is already on the map</text>
+
+  <!-- search -> P2 -->
+  <path class="ln" d="M380,453 H410 V193 H438" marker-end="url(#arr)"/>
+
+  <!-- P2 -->
+  <rect class="box" x="440" y="160" width="300" height="66" rx="8"/>
+  <text class="t" x="590" y="187">SLAM Toolbox</text>
+  <text class="t" x="590" y="210">LiDAR + odometry → map + pose</text>
+  <path class="ln" d="M590,226 V248" marker-end="url(#arr)"/>
+
+  <rect class="box" x="440" y="250" width="300" height="66" rx="8"/>
+  <text class="t" x="590" y="277">Frontier detection</text>
+  <text class="t" x="590" y="300">nearest unexplored edge</text>
+  <path class="ln" d="M590,316 V338" marker-end="url(#arr)"/>
+
+  <rect class="box" x="440" y="340" width="300" height="66" rx="8"/>
+  <text class="t" x="590" y="367">Nav2</text>
+  <text class="t" x="590" y="390">drives the robot there</text>
+
+  <!-- new views -->
+  <path class="ln" d="M740,373 H770 V193 H798" stroke-dasharray="6 5" marker-end="url(#arr)"/>
+  <text class="s" x="766" y="290" transform="rotate(-90 766 290)" dy="-5">new views</text>
+
+  <!-- P3 -->
+  <rect class="box" x="800" y="160" width="320" height="66" rx="8"/>
+  <text class="t" x="960" y="187">Camera frame</text>
+  <text class="t" x="960" y="210">a new view as the robot moves</text>
+  <path class="ln" d="M960,226 V250" marker-end="url(#arr)"/>
+
+  <rect x="800" y="252" width="320" height="114" rx="10" fill="#0F766E"/>
+  <text x="960" y="282" font-size="19" font-weight="700" fill="#ffffff" text-anchor="middle">LocateAnything-3B</text>
+  <text x="960" y="305" font-size="15" font-weight="700" fill="#B5F0E3" text-anchor="middle">the only perception model, no YOLO</text>
+  <text x="960" y="330" font-size="15" fill="#ffffff" text-anchor="middle">frame + vocabulary → labelled 2D boxes</text>
+  <text x="960" y="351" font-size="15" fill="#ffffff" text-anchor="middle">~0.4 s per call</text>
+  <path class="ln" d="M960,366 V388" marker-end="url(#arr)"/>
+
+  <rect class="box" x="800" y="390" width="320" height="66" rx="8"/>
+  <text class="t" x="960" y="417">Boxes + labels</text>
+  <text class="t" x="960" y="440">anything in the vocabulary, incl. X</text>
+
+  <!-- boxes -> P4 -->
+  <path class="ln" d="M1120,423 H1150 V193 H1178" marker-end="url(#arr)"/>
+
+  <!-- P4 -->
+  <rect class="box" x="1180" y="160" width="320" height="66" rx="8"/>
+  <text class="t" x="1340" y="187">Camera–LiDAR localizer</text>
+  <text class="t" x="1340" y="210">box bearing + LiDAR range → (x, y)</text>
+  <path class="ln" d="M1340,226 V248" marker-end="url(#arr)"/>
+
+  <rect class="box" x="1180" y="250" width="320" height="66" rx="8"/>
+  <text class="t" x="1340" y="277">Short-term memory</text>
+  <text class="t" x="1340" y="300">same object across frames → one ID</text>
+  <path class="ln" d="M1340,316 V338" marker-end="url(#arr)"/>
+
+  <rect class="box" x="1180" y="340" width="320" height="88" rx="8"/>
+  <text class="t" x="1340" y="366">Landmark memory</text>
+  <text class="t" x="1340" y="389" font-size="15">confirmed after ≥ 8 sightings in ≥ 3 frames,</text>
+  <text class="t" x="1340" y="411" font-size="15">pinned to the map with the SLAM pose</text>
+  <path class="ln" d="M1340,428 V506" marker-end="url(#arr)"/>
+
+  <polygon class="box" points="1340,508 1470,562 1340,616 1210,562"/>
+  <text class="t" x="1340" y="557">Landmark of X</text>
+  <text class="t" x="1340" y="578">confirmed?</text>
+  <path class="ln" d="M1340,616 V640" marker-end="url(#arr)"/>
+  <text class="lbl" x="1350" y="634">no</text>
+
+  <polygon class="box" points="1340,642 1470,694 1340,746 1210,694"/>
+  <text class="t" x="1340" y="689">Frontiers / patrol</text>
+  <text class="t" x="1340" y="710">points left?</text>
+  <path class="ln" d="M1340,746 V762" marker-end="url(#arr)"/>
+  <text class="lbl" x="1350" y="760">no</text>
+
+  <rect class="term" x="1230" y="764" width="220" height="36" rx="18"/>
+  <text class="t" x="1340" y="788">NOT FOUND → hold</text>
+
+  <!-- D2 yes -> approach -->
+  <path class="ln" d="M1210,562 H440 V655" marker-end="url(#arr)"/>
+  <text class="lbl" x="1176" y="553">yes</text>
+  <rect x="735" y="551" width="130" height="22" fill="#ffffff"/>
+  <text class="lbl" x="800" y="567" text-anchor="middle">X found on the map</text>
+
+  <!-- P5 -->
+  <rect class="box" x="300" y="657" width="280" height="66" rx="8"/>
+  <text class="t" x="440" y="684">Approach pose</text>
+  <text class="t" x="440" y="707">0.5 m stand-off, facing X</text>
+  <path class="ln" d="M580,690 H618" marker-end="url(#arr)"/>
+
+  <rect class="box" x="620" y="657" width="250" height="66" rx="8"/>
+  <text class="t" x="745" y="684">Nav2 NavigateToPose</text>
+  <text class="t" x="745" y="707">drives to the approach pose</text>
+  <path class="ln" d="M870,690 H898" marker-end="url(#arr)"/>
+
+  <rect class="term" x="900" y="662" width="220" height="56" rx="28"/>
+  <text class="t" x="1010" y="686">REACHED → hold,</text>
+  <text class="t" x="1010" y="706">wait for the next command</text>
+
+  <!-- footer -->
+  <text x="40" y="892" font-size="15" fill="#444">LocateAnything-3B replaces the YOLO detector and also finds the object named in the command. SLAM, exploration, localization, memory and Nav2 are the original stack (ROS 2 Humble, Gazebo Classic).</text>
+  <text x="40" y="916" font-size="15" fill="#444">Difference from the homework: there the robot maps first and is queried later; here the command comes first, and exploration is the search for X.</text>
+</svg>

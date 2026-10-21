@@ -31,6 +31,7 @@ Parameters  (see config/localizer.yaml)
 
 from __future__ import annotations
 
+import collections
 import math
 
 import rclpy
@@ -60,6 +61,53 @@ class LocalizerNode(Node):
         self.declare_parameter("scan_window_half", 5)
         self.declare_parameter("min_valid_range", 0.12)
         self.declare_parameter("max_valid_range", 8.0)
+        self.declare_parameter("edge_margin_px", 40)
+        self.declare_parameter("edge_drop_summary_sec", 30.0)
+        # ── bbox height ↔ ray distance consistency gate (R05) ──────────
+        # The scan ray is cast at the bbox CENTRE COLUMN, so a detection
+        # of a FAR object whose column crosses a NEARER obstacle gets the
+        # nearer range and its observation lands on the wrong object
+        # (R04 §4.4; R05 mapping smoke: three "person wearing a blue
+        # shirt" ghosts and one cone ghost, all from far boxes localized
+        # onto near objects — the occlusion filter only helps when the
+        # occluder is DETECTED in the same frame). Gate: a real object at
+        # ray distance d must subtend ≈ f·H/d pixels; a bbox SHORTER than
+        # (expected / tolerance) belongs to something farther than the
+        # ray hit, so the pairing is wrong and the observation is
+        # dropped. Deliberately ONE-SIDED: a bbox TALLER than expected is
+        # just frame-clipping at close range (a 1.75 m person overflows
+        # the 480 px image inside ~2 m) and stays accepted.
+        self.declare_parameter("height_gate_enabled", True)
+        self.declare_parameter("height_gate_tolerance", 2.0)
+        # "label:metres[:tolerance]". Matching: exact label first, else any
+        # label containing "person" uses the person prior (covers the
+        # shirt color expressions and any injected person search term).
+        # Squat classes carry their own TIGHTER tolerance: their absolute
+        # pixel heights are small, so the default 2.0 leaves the gate
+        # toothless exactly where the R05 smoke-3 cone ghost slipped
+        # through (far cone 88 px vs 84 px required on a 1.1 m ray).
+        # Squat classes (prior <= 0.8 m) are also gated TWO-SIDED: a box
+        # much TALLER than expected is a person force-matched into the
+        # class (they never overflow the frame at gate-relevant ranges,
+        # so the close-range clipping argument does not apply to them).
+        self.declare_parameter("height_priors", [
+            "person:1.75", "bookshelf:1.2:1.5", "trash can:0.6:1.5",
+            "traffic cone:0.9:1.4", "concrete barrier:1.1"])
+        # ── Scan/stamp matching (R06a step 1) ────────────────────────
+        # The Detection2DArray carries the SOURCE IMAGE stamp, but the
+        # ray used to be cast into whatever /scan had arrived last when
+        # the detections arrived — i.e. the scan taken ~RTT (0.35-0.5 s)
+        # AFTER the image. At 0.4 rad/s that is a ~10 deg yaw skew
+        # between the bbox bearing and the scan: R06a audit over a 61 s
+        # turning bag, 94 turning boxes: on-object 69% -> 81% once the
+        # ray is cast into the scan whose stamp is nearest the image
+        # stamp (a cone box at 3.1 m was hitting a person's leg at 1.1 m
+        # with the late scan). Scans are buffered and matched by header
+        # stamp; if the nearest one is older than `scan_match_max_dt_sec`
+        # the latest scan is used as before (and counted in the stats).
+        self.declare_parameter("scan_stamp_matching", True)
+        self.declare_parameter("scan_match_max_dt_sec", 0.25)
+        self.declare_parameter("scan_buffer_len", 25)
         self.declare_parameter("detections_topic", "/detector_node/detections")
         self.declare_parameter("scan_topic", "/scan")
         self.declare_parameter("image_topic", "/camera/image_raw")
@@ -70,6 +118,21 @@ class LocalizerNode(Node):
         scan_window_half = self.get_parameter("scan_window_half").value
         min_range        = self.get_parameter("min_valid_range").value
         max_range        = self.get_parameter("max_valid_range").value
+        edge_margin      = int(self.get_parameter("edge_margin_px").value)
+        summary_sec      = float(self.get_parameter("edge_drop_summary_sec").value)
+        self._hgate_on   = bool(self.get_parameter("height_gate_enabled").value)
+        self._hgate_tol  = float(self.get_parameter("height_gate_tolerance").value)
+        # label -> (height_m, tolerance)
+        self._height_priors: dict[str, tuple[float, float]] = {}
+        for entry in self.get_parameter("height_priors").value:
+            parts = str(entry).split(":")
+            if len(parts) >= 2:
+                tol = float(parts[2]) if len(parts) >= 3 else self._hgate_tol
+                self._height_priors[parts[0].strip().lower()] = \
+                    (float(parts[1]), tol)
+        self._scan_match = bool(self.get_parameter("scan_stamp_matching").value)
+        self._scan_max_dt = float(self.get_parameter("scan_match_max_dt_sec").value)
+        scan_buf_len     = int(self.get_parameter("scan_buffer_len").value)
         det_topic        = self.get_parameter("detections_topic").value
         scan_topic       = self.get_parameter("scan_topic").value
         image_topic      = self.get_parameter("image_topic").value
@@ -82,11 +145,26 @@ class LocalizerNode(Node):
             scan_window_half=scan_window_half,
             min_valid_range=min_range,
             max_valid_range=max_range,
+            edge_margin_px=edge_margin,
         )
 
-        # ── State: latest scan and image width ────────────────────────────
+        # ── State: latest scan and image size ─────────────────────────────
         self._latest_scan: LaserScan | None = None
+        # (stamp_sec, scan), newest last; ~5 s at the 5 Hz sim LiDAR.
+        self._scan_buf: collections.deque = collections.deque(maxlen=scan_buf_len)
+        self._scan_match_stats = dict(matched=0, fallback=0, dt_sum=0.0)
         self._image_width: int = 0
+        self._image_height: int = 0
+        self._hgate_dropped: dict[str, int] = {}
+
+        # ── Edge-box bookkeeping (observability only) ─────────────────────
+        # Per class: detections seen / dropped as frame-edge boxes, printed
+        # as one throttled line so the share is visible in the log.
+        self._edge_seen: dict[str, int] = {}
+        self._edge_dropped: dict[str, int] = {}
+        self._edge_printed: tuple = ()
+        if summary_sec > 0.0:
+            self.create_timer(summary_sec, self._log_edge_summary)
 
         # ── QoS ───────────────────────────────────────────────────────────
         sensor_qos = QoSProfile(
@@ -116,22 +194,116 @@ class LocalizerNode(Node):
 
         self.get_logger().info(
             "LocalizerNode ready  "
-            "hfov=%.1f°  scan_window=%d  range=[%.2f, %.2f]  frame=%s"
-            % (hfov_deg, scan_window_half, min_range, max_range, self._out_frame)
+            "hfov=%.1f°  scan_window=%d  range=[%.2f, %.2f]  edge_margin=%dpx  frame=%s  "
+            "scan_stamp_matching=%s (max_dt=%.2fs)"
+            % (hfov_deg, scan_window_half, min_range, max_range, edge_margin,
+               self._out_frame, self._scan_match, self._scan_max_dt)
         )
+
+    def _log_edge_summary(self) -> None:
+        snap = tuple(sorted(self._edge_seen.items())) + tuple(sorted(self._edge_dropped.items()))
+        if not self._edge_seen or snap == self._edge_printed:
+            return
+        self._edge_printed = snap
+        parts = []
+        for label in sorted(self._edge_seen):
+            n = self._edge_seen[label]
+            d = self._edge_dropped.get(label, 0)
+            parts.append("%s %d/%d (%.1f%%)" % (label, d, n, 100.0 * d / max(1, n)))
+        self.get_logger().info("[edge_drop] dropped/seen per class: " + "  ".join(parts))
+        if self._hgate_dropped:
+            self.get_logger().info(
+                "[height_gate] dropped per class: " + "  ".join(
+                    "%s %d" % kv for kv in sorted(self._hgate_dropped.items())))
+        sm = self._scan_match_stats
+        if sm["matched"] + sm["fallback"]:
+            self.get_logger().info(
+                "[scan_match] stamp-matched %d, fallback-to-latest %d, "
+                "mean |scan-image dt| %.0f ms"
+                % (sm["matched"], sm["fallback"],
+                   1000.0 * sm["dt_sum"] / max(1, sm["matched"])))
 
     # ── Callbacks ─────────────────────────────────────────────────────────
 
     def _scan_cb(self, msg: LaserScan) -> None:
         self._latest_scan = msg
+        self._scan_buf.append(
+            (msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9, msg))
+
+    def _scan_for_stamp(self, stamp) -> LaserScan | None:
+        """Scan whose header stamp is nearest the detection (= image)
+        stamp; the latest scan when matching is off, the buffer is empty
+        or the nearest one is further than `scan_match_max_dt_sec` away
+        (unsynchronised stamps, e.g. a bag without /clock)."""
+        if not self._scan_match or not self._scan_buf:
+            return self._latest_scan
+        t = stamp.sec + stamp.nanosec * 1e-9
+        best_dt, best = None, None
+        for ts, sc in self._scan_buf:
+            dt = abs(ts - t)
+            if best_dt is None or dt < best_dt:
+                best_dt, best = dt, sc
+        if best_dt is None or best_dt > self._scan_max_dt:
+            self._scan_match_stats["fallback"] += 1
+            self.get_logger().warning(
+                "[scan_match] nearest scan is %.2fs from the image stamp "
+                "(> %.2fs) — using the latest scan"
+                % (best_dt if best_dt is not None else -1.0, self._scan_max_dt),
+                throttle_duration_sec=10.0)
+            return self._latest_scan
+        self._scan_match_stats["matched"] += 1
+        self._scan_match_stats["dt_sum"] += best_dt
+        return best
 
     def _image_cb(self, msg: Image) -> None:
         if self._image_width == 0:
             self._image_width = msg.width
-            self.get_logger().info("Image width learned: %d px" % msg.width)
+            self._image_height = msg.height
+            self.get_logger().info(
+                "Image size learned: %dx%d px" % (msg.width, msg.height))
+
+    def _height_prior(self, label: str) -> tuple[float, float] | None:
+        prior = self._height_priors.get(label.lower())
+        if prior is None and "person" in label.lower():
+            prior = self._height_priors.get("person")
+        return prior
+
+    # Classes at or below this height get the two-sided check (a much
+    # taller box is a person force-matched into the class).
+    _SQUAT_MAX_H = 0.8
+
+    def _height_gate_ok(self, label: str, bbox_h_px: float,
+                        range_m: float) -> bool:
+        """False when the bbox height is inconsistent with an object of
+        this class at the ray distance (see parameter block). Too short =
+        the box belongs to something farther than the ray hit (all
+        classes); too tall = a taller object force-matched into a squat
+        class (squat classes only)."""
+        if not self._hgate_on or bbox_h_px <= 0.0 or range_m <= 0.0:
+            return True
+        prior = self._height_prior(label)
+        if prior is None:
+            return True
+        height_m, tol = prior
+        focal_px = (self._image_width / 2.0) / math.tan(
+            self._core.camera_hfov_rad / 2.0)
+        expected_px = focal_px * height_m / range_m
+        required_px = expected_px / tol
+        if self._image_height > 0:
+            # Never require more than the frame can show (a close object's
+            # box clips at the image height). The cap applies to the
+            # REQUIREMENT, after tolerance — capping the expectation first
+            # would let tolerance shrink the requirement below what a real
+            # clipped box always shows.
+            required_px = min(required_px, 0.9 * self._image_height)
+        if bbox_h_px < required_px:
+            return False
+        if height_m <= self._SQUAT_MAX_H and bbox_h_px > expected_px * tol:
+            return False
+        return True
 
     def _detections_cb(self, msg: Detection2DArray) -> None:
-        scan = self._latest_scan
+        scan = self._scan_for_stamp(msg.header.stamp)
         if scan is None:
             return
         if self._image_width <= 0:
@@ -151,6 +323,14 @@ class LocalizerNode(Node):
             conf  = det.results[0].hypothesis.score
             u     = det.bbox.center.position.x
 
+            self._edge_seen[label] = self._edge_seen.get(label, 0) + 1
+            if self._core.is_edge_box(u, self._image_width):
+                self._edge_dropped[label] = self._edge_dropped.get(label, 0) + 1
+                self.get_logger().debug(
+                    "[edge_drop] '%s' u=%.0f within %dpx of the frame edge"
+                    % (label, u, self._core.edge_margin_px))
+                continue
+
             result = self._core.localize(
                 label=label,
                 confidence=conf,
@@ -167,6 +347,18 @@ class LocalizerNode(Node):
                     "No valid range for '%s' (u=%.0f, bearing=%.2f rad)"
                     % (label, u, self._core.pixel_to_bearing(u, self._image_width))
                 )
+                continue
+
+            if not self._height_gate_ok(label, det.bbox.size_y,
+                                        result.range_m):
+                self._hgate_dropped[label] = \
+                    self._hgate_dropped.get(label, 0) + 1
+                self.get_logger().info(
+                    "[height_gate] dropped '%s': bbox %.0fpx vs %.2fm ray "
+                    "(short = far box on near obstacle; tall = bigger "
+                    "object force-matched into a squat class)"
+                    % (label, det.bbox.size_y, result.range_m),
+                    throttle_duration_sec=10.0)
                 continue
 
             # ── PointStamped (backward compat) ────────────────────────

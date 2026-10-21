@@ -95,6 +95,15 @@ Visualization Manager:
         Value: /frontiers_markers
         Reliability Policy: Reliable
 
+    - Class: rviz_default_plugins/MarkerArray
+      Name: HUD
+      Enabled: true
+      Value: true
+      Topic:
+        Value: /coordinator_node/hud_markers
+        Reliability Policy: Reliable
+        Durability Policy: Transient Local
+
     - Class: rviz_default_plugins/Image
       Name: Detector Debug Image
       Enabled: true

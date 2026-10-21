@@ -1,0 +1,58 @@
+# LocateAnything-3B grounding server (query-time referring-expression
+# grounding). Previously this image was python:3.11-slim running the mock
+# HSV backend, because the only dev machine was a Mac; on an NVIDIA host
+# it now runs the real model.
+#
+# Ubuntu 22.04, not 24.04, and that is not incidental: the model card pins
+# numpy==1.25.0, whose last cpython ABI is cp311 — there is no cp312 wheel
+# (numpy 1.26 was the first release to support Python 3.12). Noble ships
+# Python 3.12, so building this on 24.04 forces numpy to build from source
+# against a Python it predates. Jammy's Python 3.10 takes the wheel.
+#
+# As with the sim image, the base is plain ubuntu: the pip cu121 torch
+# wheels vendor their own CUDA runtime and cuDNN, and libcuda.so is
+# injected at runtime by the NVIDIA Container Toolkit.
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# No `graphics` needed here — this is pure compute, unlike the sim image
+# which also renders through EGL.
+ENV NVIDIA_VISIBLE_DEVICES=all \
+    NVIDIA_DRIVER_CAPABILITIES=compute,utility
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        python3 python3-pip python3-dev \
+        libglib2.0-0 \
+        ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Versions per https://huggingface.co/nvidia/LocateAnything-3B. They are
+# pinned exactly because the model's generation path is sensitive to the
+# transformers release: the hybrid parallel-box decode it uses is not a
+# stable public API.
+RUN pip3 install --no-cache-dir \
+        --index-url https://download.pytorch.org/whl/cu128 torch torchvision \
+    && pip3 install --no-cache-dir \
+        "transformers==4.57.1" \
+        "numpy==1.25.0" \
+        "Pillow==11.1.0" \
+        "opencv-python-headless==4.11.0.86" \
+        peft \
+        "decord==0.6.0" \
+        "lmdb==1.7.5" \
+        accelerate \
+    && python3 -c "import torch; assert torch.version.cuda, 'torch is a CPU build; expected a cu12x wheel'; print('torch', torch.__version__, 'cuda', torch.version.cuda)"
+
+# Weights are ~7 GB and download on first start. compose mounts a named
+# volume here so a container restart does not re-fetch them.
+ENV HF_HOME=/hf-cache
+RUN mkdir -p /hf-cache
+
+WORKDIR /app
+
+# GROUNDING_BACKEND lets the same image serve the GPU-free mock backend
+# (`docker compose run -e GROUNDING_BACKEND=mock grounding`) when you want
+# to exercise the pipeline without loading 7 GB of weights.
+ENV GROUNDING_BACKEND=locate_anything
+CMD ["sh", "-c", "python3 server.py --backend \"$GROUNDING_BACKEND\" --port 8801"]

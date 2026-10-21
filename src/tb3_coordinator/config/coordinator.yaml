@@ -12,8 +12,74 @@ coordinator_node:
     status_topic:             "~/status"
     navigate_to_pose_action:  "navigate_to_pose"
     nav_goal_timeout_sec:     60.0
+    # Boot behaviour. "idle" (R07 final): stand still with exploration off
+    # until the first /user_command; a target the memory does not know
+    # starts exploration through the search path, a known one is
+    # navigated to directly. "exploring": map from boot (pre-R07).
+    start_mode:               "idle"
     auto_resume_exploration:  true
+    # R04 demo shape: after TARGET_REACHED / TARGET NOT FOUND go to IDLE
+    # and hold position (exploration off, zero cmd_vel) until the next
+    # user command. Takes precedence over auto_resume_exploration; set
+    # false to restore the pre-R04 auto-resume behavior.
+    hold_after_goal:          true
     resume_delay_sec:         3.0
+
+    # ── Search link (Phase 2c) ─────────────────────────────────
+    # Latched topics wiring SEARCHING mode: the injected expression
+    # (consumed by la_detector_node + semantic_map_memory_node), the
+    # landmark stream watched for the promoted search class, and
+    # goal_assignment_node's exploration-complete signal that triggers
+    # the explicit NOT FOUND.
+    active_search_topic:        "/active_search"
+    landmark_topic:             "/semantic_map_memory_node/landmark_objects"
+    exploration_complete_topic: "/exploration_complete"
+    odom_topic:                 "/odom"
+    # If exploration was ALREADY complete when the search starts, wait
+    # this long before declaring NOT FOUND (lets the detector see the
+    # target from the current pose).
+    search_grace_sec:           15.0
+    # ── Search patrol (R05) ────────────────────────────────────
+    # "Exploration complete" means the MAP is complete, not that the
+    # robot has LOOKED at everything: frontier goals face outward, so
+    # interior objects are only ever seen in passing. Measured (R05
+    # A1/A2): after exploration finished (~400 s) every later search
+    # died at the grace window standing still — the green-shirt
+    # candidate sat at n=4/5, 0.05 m from the true person, and expired;
+    # 'go to the bookshelf' gave up after 15 s. Patrol instead: drive to
+    # a waypoint and turn on the spot there (sweep_angular_vel 0.4 is
+    # below the detector's 0.5 spin gate, so the frames still count),
+    # one round per waypoint, NOT FOUND only after the budget is spent.
+    # Disable with search_patrol_enabled:=false to get the R04 behavior.
+    search_patrol_enabled:      true
+    search_patrol_rounds:       4
+    search_patrol_sweep_sec:    14.0
+    search_patrol_goal_timeout_sec: 60.0
+    # Interior quadrant centres of the 6x6 m room: close enough to every
+    # object for a sweep to see it inside the 2.5 m memory range gate,
+    # far enough from the walls to stay reachable.
+    search_patrol_points:       ["1.2:1.2", "-1.2:1.2", "-1.2:-1.2", "1.2:-1.2"]
+    # Preemption safety net: dispatch the queued command even if the
+    # cancelled goal's terminal result never arrives.
+    preempt_watchdog_sec:       5.0
+    # ── Attribute-on-identity (R07) ────────────────────────────
+    # A search also succeeds when a landmark carries the searched
+    # expression as an ATTRIBUTE (extra hypothesis from the map memory,
+    # e.g. "person wearing a green shirt" on person_2) with at least this
+    # many distinct detections. semantic_query_node then resolves the
+    # expression to that landmark (attribute_min_count there).
+    search_attribute_min_count: 2
+    # ── HUD in RViz (R07) ──────────────────────────────────────
+    # Two text lines ("cmd: ...", "state: ...") on a dark slab, published
+    # on ~/hud_markers (latched, 1 Hz) at a fixed map position: the empty
+    # band above the 6x6 m room in la_demo.rviz (TopDownOrtho, centre
+    # (1.5, 0), 55 px/m -> y visible to +-4.9). Spaces are drawn as '_'
+    # (rviz2 renders a space as a wide gap).
+    hud_enabled:                true
+    hud_x:                      1.5
+    hud_y:                      4.3
+    hud_text_height:            0.3
+    hud_frame:                  "map"
 
     # ── Perception sweep (disabled by default) ─────────────────
     # The 360° in-place sweep was originally meant to "kick-start" SLAM by
@@ -38,6 +104,21 @@ semantic_map_memory_node:
     map_topic:                "/map"
     target_frame:             "map"
     tf_timeout:               0.3
+    # R07: base_link->map is looked up AT THE OBSERVATION'S STAMP (the
+    # source image time, carried by semantic_memory_node) instead of the
+    # latest transform. Time(0) meant "the robot's pose when the 1 Hz
+    # memory message arrived", up to 1 s + the 5 s stale window after the
+    # measurement; R06a audit on a 61 s turning bag: on-object 82% -> 68%.
+    # If the stamp is not in the TF buffer the lookup falls back to
+    # Time(0) (counted in the gate summary's [tf_match] line).
+    # tf_stamp_timeout is an upper bound on blocking, not a useful wait —
+    # this node spins single-threaded and the TransformListener shares
+    # that executor, so no /tf can arrive while the callback waits (R07
+    # review); 0.0 = non-blocking, chosen as the final demo config (R07
+    # smoke at 0.1: stamped 222, fallback 0 — the wait never did anything).
+    # tf_stamped_lookup: false restores the R06a behaviour.
+    tf_stamped_lookup:        true
+    tf_stamp_timeout:         0.0
     publish_rate:             1.0
 
     # ── Landmark matching ──────────────────────────────────
@@ -64,10 +145,39 @@ semantic_map_memory_node:
 
     # ── Promotion ──────────────────────────────────────────
     # Generic fallback (any class without a class-specific override
-    # below uses this). Kept at 3 because most non-person classes
-    # (table, stop_sign) appear once per world and small numbers are
-    # fine.
-    min_observations:         3
+    # below uses this). Raised 3 → 8 in Phase 2b for the same reason
+    # person went 3 → 8 in a later fork of this stack: with the LocateAnything
+    # vocabulary the fallback governs the open-vocabulary classes
+    # (bookshelf / trash can / traffic cone), and at 3 a run-1 ghost
+    # ("traffic cone_3", 3 stray mislocalized observations) became a
+    # permanent landmark that "go to the cone" then navigated to. Real
+    # objects accumulate n=15+ within one exploration pass, so 8 costs
+    # only promotion latency. The YOLO path is unaffected: person /
+    # bench / stop sign all have explicit overrides below.
+    min_observations:         8
+    # Promotion guard (R07 final): on top of the count threshold, a
+    # candidate's observations must come from at least this many distinct
+    # (memory object id, observation stamp) pairs = distinct detections.
+    # semantic_memory_node republishes each live object at 1 Hz for up to
+    # 5 s after its last detection, and since the memory TF fix those
+    # republishes stack on one map point, so n counts one detection 3-6
+    # times (R07 smoke: 5 trash-can detections -> n=27). The R07 smoke
+    # ghost: 2 mislabelled "trash can" frames on the green-shirt person ->
+    # 2 memory objects x 4 republishes = n=8 in 4 s -> promoted, blocked
+    # the real person for 65 s until relabel. With k>=3 that candidate is
+    # held (log "[held]", gate row held_distinct). Real objects clear it
+    # trivially (bag_ab barrier: n=14 from 7 stamps). Applies to every
+    # class including the active search expression (search threshold 3
+    # stays; it now means 3 distinct frames instead of 3 republishes).
+    min_distinct_observations: 3
+    # Attribute-on-identity (R07): a more specific same-family label
+    # ("person wearing a green shirt") observed within this distance of an
+    # existing base-class landmark (`person`) becomes attribute evidence
+    # on that landmark (published as extra hypotheses on
+    # landmark_objects) instead of growing a second landmark on the same
+    # spot. Measured 2026-09-17: the expression used to promote on the
+    # WRONG person (white shirt) or sit as a duplicate next to person_2.
+    attribute_merge_distance_m: 1.5
 
     # ── Obstacle island search ─────────────────────────────
     # Search window radius in grid cells around the observation.
@@ -102,8 +212,113 @@ semantic_map_memory_node:
     person_min_observations:   8
     bench_min_observations:    4
     stop_sign_min_observations: 5
+
+    # ── Search link (Phase 2c) ─────────────────────────
+    # Promotion threshold for the class named on /active_search while
+    # the search is active. Between the generic fallback (8, ghost
+    # filter) and the pre-R02b default (3): a searched class is
+    # confirmed downstream by the coordinator before any goal is sent,
+    # and exploration may give the object only one viewing pass — R02b
+    # §5.1 measured sparse-view candidates expiring at 7/8. 5 still
+    # rejects the run-1 ghost pattern (3 stray observations).
+    # R05: 5 -> 3, and it now applies ONLY to searched classes outside
+    # the base vocabulary (open-vocabulary expressions). Those are the
+    # recall-bound ones: the low camera shows a colored shirt in ~10% of
+    # frames (R05 probe: 6/60 frames carry a green-expression box, all
+    # correct), and after the range/edge/height gates a 13-minute search
+    # reached only 26 observations — never 5. At 3 the same search
+    # promoted at 0.15 m from the true person. The R04 rationale for 5
+    # (filter the 3-stray-observation ghost pattern) is now carried by
+    # the localizer height gate, the detector containment veto and the
+    # same-family exemption. Searched classes that ARE in the base
+    # vocabulary keep their normal threshold — they are observed
+    # continuously, and at 3 a bookshelf search promoted a ghost on the
+    # blue-shirt person while the real shelf reached n=8 (R05 B1).
+    search_min_observations:   3
+    # Candidate expiry for the ACTIVE search class only. The generic
+    # candidate_timeout (45 s) assumes the mapping path's steady stream;
+    # a searched class is seen only when exploration happens to face it
+    # (drive-by bursts). R04 smoke 2 measured the true green-shirt
+    # candidate expiring at n=4/5, age exactly 45 s, twice in one
+    # search. 150 s bridges the gap between two exploration passes
+    # while still letting stray mislabel clusters die between searches.
+    search_candidate_timeout:  150.0
+    active_search_topic:       "/active_search"
+    # Close-range forced-choice guard: observations of the active
+    # search class below this range are rejected. Measured R02c run A:
+    # parked 0.5 m from the bookshelf during a cone search, the shelf
+    # close-up was boxed "traffic cone" 74x in 89 s and hijacked the
+    # search. Legitimate promotions happen at 1-2.5 m.
+    search_min_range_m:        0.9
+    # A landmark whose class is not currently observable (base
+    # vocabulary or active search label) cannot be relabeled away —
+    # its count is frozen, so challenger counts are one-sided
+    # evidence. Measured R02c run A: bookshelf_0 flipped to person 61 s
+    # after its search cleared.
+    # R05: the default detector profile maps all five registry classes,
+    # so all five are permanently observable (their counts keep moving
+    # and relabel evidence against them is two-sided again).
+    observable_classes:        ["person", "bookshelf", "trash can",
+                                "traffic cone", "concrete barrier"]
+    # Per-class merge radius, "label:metres" — overrides candidate AND
+    # landmark merge for that class, including during its search. The
+    # jersey barrier is 4.07 m long and its true observations scatter
+    # along the body wherever each ray lands; under the 0.6 m search
+    # radius they split into candidates that never reach n=5 (R05 A1:
+    # 70 s barrier search, zero promotions → NOT FOUND). 2.2 m spans
+    # half the barrier plus slop.
+    class_merge_overrides:     ["concrete barrier:2.2"]
     wall_boundary_margin_m:   0.20
+
+    # ── Landmark relabelling ───────────────────────────────
+    # A landmark used to be stuck with whatever label promoted it. The
+    # cross-class mutex then discarded every disagreeing observation that
+    # landed on it, so a landmark promoted under the wrong label actively
+    # suppressed the evidence that would have corrected it: measured
+    # 2026-09-05, a `trash_can_1` sitting on the chair rejected 86 `chair`
+    # observations and `go to chair` could not succeed until the run was
+    # restarted.
+    #
+    # Now every landmark keeps a per-label observation count, disagreeing
+    # observations inside the merge radius are counted instead of dropped,
+    # and the label switches when a challenger is clearly ahead. Position is
+    # still averaged over observations of the current label only.
+    relabel_enabled:           true
+    # How far ahead the challenger has to be: challenger >= ratio x current,
+    # AND the challenger must also have reached its own min_observations
+    # (12 for chair / trash_can, 8 for person) so a few strays cannot rename
+    # anything. 1.5 is the hysteresis band. Because the losing label keeps
+    # its count, flipping back needs 1.5x the NEW count, so a correction
+    # settles instead of oscillating. Equal counts never relabel.
+    relabel_ratio:             1.5
+    # How close a disagreeing observation has to be to count as evidence.
+    # Kept at the cross-class mutex distance ON PURPOSE, not at
+    # merge_distance: this is exactly the set of observations the old code
+    # already discarded, so counting them costs the candidate layer nothing.
+    # Measured at 1.5 m over 8 acceptance runs it starved candidates instead
+    # - one run absorbed 53 chair observations while the chair candidate saw
+    # 2, and the chair was never promoted. Raise it only together with a
+    # fresh acceptance batch.
+    relabel_evidence_distance_m: 0.6
+
+    # ── Gate statistics (observability only) ──────────────
+    # Every rejection gate in the observation pipeline (range, TF, grid
+    # bounds, no occupancy island, geometry, mutex) and every success path
+    # (landmark merge, candidate merge, new candidate, promotion) is counted
+    # per class. One `[gate_summary]` block is logged every this many
+    # seconds when a counter changed, plus a final block at shutdown, so a
+    # log can say which gate held a target back and by how much. The
+    # counters are never consulted by the promotion logic. 0 disables the
+    # periodic block (the final one is still printed).
+    gate_summary_interval_sec: 10.0
 
     # ── Visualization ──────────────────────────────────────
     sphere_radius:            0.18
     text_offset_z:            0.45
+    # Label layout for the top-down demo view (la_demo.rviz is
+    # TopDownOrtho at 55 px/m): label 0.32 m above (+y) the sphere so
+    # they do not overlap, 0.22 m text (= 12 px), dark translucent slab
+    # behind it. label_background: false = plain text as before R07.
+    label_offset_y:           0.32
+    label_text_height:        0.22
+    label_background:         true

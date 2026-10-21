@@ -1,0 +1,146 @@
+# Sim image: ROS 2 Humble (Ubuntu 22.04) + Gazebo Classic 11 + Nav2/SLAM
+# + CPU torch/ultralytics for the YOLOv8n baseline detector.
+#
+# Design notes (see reports/R01 §5.6):
+#   * This image renders through X11/GLX on the host's display — NOT the
+#     headless-EGL form of the old Jazzy image. gzclient/RViz show up as
+#     normal windows on the host screen (which is also how demo recording
+#     is done). The NVIDIA Container Toolkit injects libGLX_nvidia at run
+#     time, keyed off the two NVIDIA_* env vars below.
+#   * torch is deliberately the CPU build: the only consumer is the
+#     YOLOv8n baseline detector (device: "cpu" in detector.yaml). All
+#     GPU perception lives in the separate grounding image (cu128).
+FROM osrf/ros:humble-desktop-full
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# What the NVIDIA Container Toolkit injects. `graphics` and `display`
+# (both covered by `all`) are the load-bearing capabilities — without
+# them glvnd finds no NVIDIA vendor and OGRE falls back to llvmpipe
+# software rendering.
+ENV NVIDIA_VISIBLE_DEVICES=all \
+    NVIDIA_DRIVER_CAPABILITIES=all
+
+# ── ROS 2 Humble nav stack + Gazebo Classic ──────────────────────────────
+# ros-humble-turtlebot3-gazebo pulls gazebo11 + gazebo-ros (Classic) as
+# dependencies; desktop-full itself only ships Ignition Fortress, which
+# this project does not use.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ros-humble-navigation2 \
+        ros-humble-nav2-bringup \
+        ros-humble-slam-toolbox \
+        ros-humble-turtlebot3-gazebo \
+        ros-humble-turtlebot3-msgs \
+        ros-humble-vision-msgs \
+        ros-humble-cv-bridge \
+        ros-humble-tf2-geometry-msgs \
+        python3-colcon-common-extensions \
+        python3-pip \
+        git curl unzip \
+        xdotool \
+    && rm -rf /var/lib/apt/lists/*
+
+# ── Gazebo models baked into the image ───────────────────────────────────
+# warehouse_models_person.world includes model://person_standing (plus
+# ground_plane and sun), and — Phase 2b — model://bookshelf,
+# model://first_2015_trash_can and model://construction_cone for the
+# open-vocabulary targets. None of them ship with the gazebo11 apt
+# packages; Gazebo Classic would try to fetch them from the online model
+# database at runtime, which stalls for minutes on this host (VPN blocks
+# container egress). Fetch them once at build time instead — from the
+# osrf gazebo_models GitHub repo (a sparse, blobless clone of just these
+# dirs, not the full ~1 GB repo). Fuel is NOT equivalent: its copies are
+# renamed ("Standing person"), which breaks model:// URI lookup.
+RUN set -e; \
+    git clone --depth 1 --filter=blob:none --sparse \
+        https://github.com/osrf/gazebo_models /tmp/gazebo_models; \
+    git -C /tmp/gazebo_models sparse-checkout set person_standing ground_plane sun \
+        bookshelf first_2015_trash_can construction_cone; \
+    mkdir -p /opt/gazebo_models; \
+    cp -r /tmp/gazebo_models/person_standing /tmp/gazebo_models/ground_plane \
+          /tmp/gazebo_models/sun /tmp/gazebo_models/bookshelf \
+          /tmp/gazebo_models/first_2015_trash_can \
+          /tmp/gazebo_models/construction_cone /opt/gazebo_models/; \
+    rm -rf /tmp/gazebo_models; \
+    for m in person_standing bookshelf first_2015_trash_can construction_cone; do \
+        test -f /opt/gazebo_models/$m/model.sdf \
+        && test -f /opt/gazebo_models/$m/model.config; \
+    done
+
+# Empty URI disables the online model database entirely — every model the
+# worlds need is either baked in above or comes from turtlebot3_gazebo's
+# share dir (added to GAZEBO_MODEL_PATH by its ament env hook).
+ENV GAZEBO_MODEL_PATH=/opt/gazebo_models \
+    GAZEBO_MODEL_DATABASE_URI=""
+
+# ── Python: CPU torch + ultralytics for the YOLOv8n baseline ─────────────
+# Pins, all load-bearing (inherited from the verified Jazzy image, same
+# failure modes apply on Humble):
+#   * torch from the CPU index — cu12x wheels would drag ~3 GB of nvidia-*
+#     runtime into an image that never runs GPU inference. torch installed
+#     FIRST so ultralytics finds it satisfied and does not pull the CUDA
+#     default from PyPI.
+#   * numpy<2       — Humble's apt cv_bridge extension is compiled against
+#                     22.04's numpy 1.21; a pip numpy 2.x shadows it and
+#                     breaks imgmsg_to_cv2 at runtime.
+#   * setuptools==58.2.0 — the last version whose easy_install path works
+#                     with 22.04's apt packaging 21.3; anything newer makes
+#                     colcon's setup.py develop step die with
+#                     "canonicalize_version() got an unexpected keyword
+#                     argument 'strip_trailing_zero'". torch's metadata
+#                     declares setuptools>=77 but never imports it at
+#                     runtime (inference verified under 58.2.0).
+#   * opencv-python<5 — OpenCV 5 renumbers CV_8UC* constants while the
+#                     compiled cv_bridge still returns OpenCV-4 numbering.
+# Pins installed last, after anything that might upgrade them.
+RUN pip3 install --no-cache-dir \
+        --index-url https://download.pytorch.org/whl/cpu torch torchvision \
+    && pip3 install --no-cache-dir ultralytics \
+    && pip3 install --no-cache-dir 'numpy<2' 'setuptools==58.2.0' 'opencv-python<5' \
+    && python3 -c "import torch; assert torch.version.cuda is None, 'expected a CPU torch build, got cu' + str(torch.version.cuda); print('torch', torch.__version__, '(cpu)')" \
+    && python3 -c "import cv2; assert cv2.CV_8UC3 == 16, f'CV_8UC3={cv2.CV_8UC3}, expected 16 (cv_bridge ABI mismatch)'" \
+    && python3 -c "import numpy; assert numpy.__version__.startswith('1.'), numpy.__version__; print('numpy', numpy.__version__)" \
+    && python3 -c "import ultralytics; print('ultralytics', ultralytics.__version__)"
+
+# ── jersey_barrier (R05) ─────────────────────────────────────────────────
+# Fifth world object, registry class "traffic barrier". Its own layer,
+# placed AFTER the heavy pip layer on purpose: adding a model must not
+# invalidate the cached torch download above.
+RUN set -e; \
+    git clone --depth 1 --filter=blob:none --sparse \
+        https://github.com/osrf/gazebo_models /tmp/gm; \
+    git -C /tmp/gm sparse-checkout set jersey_barrier; \
+    cp -r /tmp/gm/jersey_barrier /opt/gazebo_models/; \
+    rm -rf /tmp/gm; \
+    test -f /opt/gazebo_models/jersey_barrier/model.sdf; \
+    test -f /opt/gazebo_models/jersey_barrier/model.config
+
+COPY entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
+ENV TURTLEBOT3_MODEL=waffle_pi
+
+# uid 1000 matches the host user, so files written into the bind-mounted
+# workspace stay owned by them. Pre-create every path compose mounts a
+# named volume onto — Docker seeds a fresh named volume from the image's
+# content at that path, ownership included; a path missing from the image
+# becomes an empty root-owned dir and the first colcon build dies with
+# EACCES.
+RUN useradd -m -u 1000 -s /bin/bash ubuntu \
+    && mkdir -p /home/ubuntu/ws/build /home/ubuntu/ws/install /home/ubuntu/ws/log \
+                /home/ubuntu/.tb3_semantic_nav/evidence \
+                /home/ubuntu/.gazebo \
+    && chown -R ubuntu:ubuntu /home/ubuntu
+# ^ .gazebo pre-created for the same reason as the ws dirs: compose
+# bind-mounts gazebo_gui.ini inside it, and a parent directory Docker
+# has to invent for a mount is root-owned — gzserver/gzclient then
+# SIGABRT on create_directory("~/.gazebo/server-11345").
+
+USER ubuntu
+WORKDIR /home/ubuntu/ws
+
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+# No Jupyter here (unlike the Jazzy image): the stack is driven with
+# `docker exec … ros2 launch` + terminals, per project ground rules. The
+# container just idles until exec'd into.
+CMD ["sleep", "infinity"]

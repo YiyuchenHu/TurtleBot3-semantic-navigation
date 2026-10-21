@@ -1,0 +1,71 @@
+# ============================================================
+# semantic_targets_la.yaml — Semantic object registry for the
+# LocateAnything perception path (full_semantic_nav_la.launch.py).
+# ============================================================
+#
+# Same schema as semantic_targets.yaml (which stays untouched as the
+# YOLO baseline's registry — the two launches must keep working
+# side by side). Differences of principle:
+#
+#   * detector_label here is a LocateAnything detect-vocabulary word,
+#     NOT a COCO class. The la_detector_node vocabulary and this file
+#     must list the same strings — the label a landmark is stored
+#     under is exactly the vocabulary word (词表即真理, R01 §5.5).
+#   * Per the Phase-2b decision, only classes that physically exist in
+#     warehouse_models_person.world are listed. bench / stop sign are
+#     not in that world and are therefore absent.
+#
+# bookshelf, trash can and traffic cone are NOT in the YOLO/COCO
+# 80-class list — they are the open-vocabulary acceptance targets.
+# ============================================================
+
+semantic_targets:
+
+  - semantic_name:   "person"
+    detector_label:  "person"
+    gazebo_model:    "person_standing"
+    enabled:         true
+    notes: >
+      Same as the YOLO-era entry. Baseline regression target
+      ("go to person" must keep working, R02a §2.5).
+
+  - semantic_name:   "bookshelf"
+    detector_label:  "bookshelf"
+    gazebo_model:    "bookshelf"
+    enabled:         true
+    notes: >
+      North mid-wall, open side facing the room centre. Not a COCO
+      class. Solid side/back panels at LDS scan height.
+
+  - semantic_name:   "trash_can"
+    detector_label:  "trash can"
+    gazebo_model:    "first_2015_trash_can"
+    enabled:         true
+    notes: >
+      South mid-wall, green FIRST 2015 can. Not a COCO class.
+      semantic_name uses underscore form; detector_label keeps the
+      space (mirrors the "stop sign" convention). parse_command
+      reaches it via the "trash can" phrase alias in query_core.
+
+  - semantic_name:   "cone"
+    detector_label:  "traffic cone"
+    gazebo_model:    "construction_cone"
+    enabled:         true
+    notes: >
+      East mid-wall, orange construction cone. Not a COCO class.
+      Users can say "go to the cone" (single token) or
+      "go to the traffic cone" / "construction cone" (aliases).
+
+  - semantic_name:   "traffic_barrier"
+    detector_label:  "concrete barrier"
+    gazebo_model:    "jersey_barrier"
+    enabled:         true
+    notes: >
+      R05: jersey barrier along the west wall (4.07 m long). Not a
+      COCO class. Reached via the "traffic barrier" / "jersey
+      barrier" / "barrier" phrase aliases in query_core.
+      detector_label is "concrete barrier", NOT "traffic barrier":
+      offline probe (reports/R05_probe/) got 0/60 frames with
+      "traffic barrier" but correct boxes with "concrete barrier" /
+      "jersey barrier" / "barrier" — 词表即真理 cuts both ways, the
+      label must be a phrase the model actually grounds.

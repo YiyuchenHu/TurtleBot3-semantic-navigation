@@ -1,0 +1,53 @@
+# ============================================================
+# tb3_detector — la_detector_node, SEARCH-FIRST profile (R04 demo shape)
+# ============================================================
+# The R04 default, preserved verbatim when R05 made map-and-search the
+# default (la_detector.yaml): base vocabulary EMPTY, so NOTHING is mapped
+# during exploration and every user command goes through the search link —
+# the query expression injected via /active_search is the only class that
+# can be published and promoted.
+#
+# Select with:  detector_config:=<share>/config/la_detector_search_first.yaml
+#
+# ROS 2 Humble rejects a literal empty list (type-inferred as BYTE_ARRAY
+# against the STRING_ARRAY declaration), so an empty string entry is used
+# instead; the node strips blank entries.
+
+la_detector_node:
+  ros__parameters:
+    server_url: "http://127.0.0.1:8801"
+    request_timeout_sec: 5.0
+
+    vocabulary: [""]
+
+    active_search_topic: "/active_search"
+
+    # Coverage categories (requested, filtered on, NEVER published).
+    # With the empty vocabulary EVERY request is coverage-driven:
+    #   * the four physical world classes keep the geometric safety nets
+    #     (occlusion filter, same-object veto) sighted — R02c smoke run 1;
+    #   * the shirt-color person expressions are the correct alternatives
+    #     that let a color-attribute search say "no" instead of
+    #     force-matching the wrong person (R04 probe, 12/12 with them,
+    #     0/6 negatives without).
+    coverage_categories: ["person", "bookshelf", "trash can", "traffic cone",
+                          "concrete barrier",
+                          "person wearing a green shirt",
+                          "person wearing a red shirt",
+                          "person wearing a blue shirt",
+                          "person wearing a white shirt"]
+
+    min_interval_sec: 0.3
+    max_angular_vel: 0.5
+    occlusion_filter: true
+    cross_class_iou: 0.8
+
+    image_topic:        "/camera/image_raw"
+    odom_topic:         "/odom"
+    detections_topic:   "/detector_node/detections"
+    debug_image_topic:  "/detector_node/debug_image"
+
+    publish_debug_image: true
+    jpeg_quality: 85
+    queue_size: 5
+    stats_interval_sec: 10.0

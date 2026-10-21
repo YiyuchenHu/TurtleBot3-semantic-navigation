@@ -20,8 +20,22 @@ frontier_detection_node:
     # Minimum number of adjacent frontier cells to form a cluster; smaller clusters are discarded.
     min_cluster_size: 3 # default is 5
 
-    # Max cost at centroid to accept a frontier (0–255). Centroids with cost > this are rejected when use_costmap_filter is true.
-    cost_threshold: 150 # default is 128
+    # Max cost at a centroid to accept a frontier. Centroids with cost > this
+    # are rejected when use_costmap_filter is true.
+    #
+    # SCALE: this is compared against /global_costmap/costmap, which is a
+    # nav_msgs/OccupancyGrid, NOT the raw 0-255 costmap. Nav2's
+    # Costmap2DPublisher translation table maps raw -> grid as:
+    #   0 (FREE) -> 0 | 1..252 -> 1..98 | 253 (INSCRIBED) -> 99
+    #   254 (LETHAL) -> 100 | 255 (NO_INFORMATION) -> -1
+    # so the only values a known cell can carry are 0..100. The old 150 was on
+    # the raw 0-255 scale and therefore sat above every reachable value: the
+    # cost test never rejected anything (only the separate unknown/out-of-bounds
+    # path did). 98 is the largest value that still rejects exactly the two
+    # states a goal can never be sent to -- 99 = inscribed (the robot's own
+    # footprint would collide) and 100 = lethal -- while accepting the whole
+    # 0..98 inflation gradient, so ordinary frontiers near a wall still pass.
+    cost_threshold: 98 # was 150 on the wrong (raw 0-255) scale
 
     # If true, reject frontier centroids whose costmap cost exceeds cost_threshold.
     use_costmap_filter: true
@@ -35,6 +49,10 @@ frontier_detection_node:
 
 goal_assignment_node:
   ros__parameters:
+    # Explore before anything arrives on /exploration_enabled? false (R07):
+    # stand still until the coordinator enables it (first search command).
+    # Standalone exploration without a coordinator: set true.
+    start_enabled: false
     # Odometry topic (e.g. /odom or /odometry/filtered from robot_localization).
     odom_topic: "/odometry/filtered"
 
@@ -56,6 +74,13 @@ goal_assignment_node:
 
     # Do not select a goal within this distance (m) of the last failed/aborted goal.
     failed_goal_avoidance_radius: 1.0
+    # Failed goals are kept as a TIME-LIMITED SET, not one slot. The single
+    # slot let a failing fallback goal overwrite a failing frontier goal and
+    # re-arm it, producing a 40 s limit cycle that never ended
+    # (reports/chat_return_0827_wedge.md). TTL is what re-admits a goal that
+    # only failed because the map was still unknown there.
+    failed_goal_ttl_sec: 90.0
+    failed_goal_max_entries: 64
 
     # Throttle "no valid frontiers" / exploration-complete logs to this interval (s).
     exploration_complete_log_interval: 5.0
@@ -136,6 +161,10 @@ goal_assignment_node:
     # plenty of time to re-evaluate the costmap, but stops the bot from
     # hesitating next to a corner person indefinitely.
     stalemate_idle_sec: 20.0
+    # Exploration-complete detection no longer requires a prior successful
+    # goal (that gate was shut exactly when the node was deadlocked). Instead
+    # it refuses to fire until exploration has been running this long.
+    min_exploration_time_sec: 60.0
 
     # What to do when the scan is declared complete:
     #   "stop"        — just stay idle. Cleanest for a demo / debug.

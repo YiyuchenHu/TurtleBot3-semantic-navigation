@@ -1,0 +1,226 @@
+# ============================================================
+# tb3_detector — la_detector_node configuration
+# ============================================================
+# LocateAnything mapping-path detector (Phase 2b). Drop-in producer for
+# /detector_node/detections: same message contract as the YOLO
+# detector_node, but inference happens over HTTP in the grounding
+# container (POST /detect, fixed vocabulary).
+
+la_detector_node:
+  ros__parameters:
+    # ── Grounding server ───────────────────────────────────
+    # The grounding compose service shares the sim container's network
+    # namespace, so loopback resolves from every in-container node.
+    server_url: "http://127.0.0.1:8801"
+    request_timeout_sec: 5.0
+
+    # ── Vocabulary ─────────────────────────────────────────
+    # DEFAULT = MAP-AND-SEARCH (R05): the five registry classes map
+    # during exploration, so a repeated command ("go to the bookshelf")
+    # is answered from memory; color-attribute person queries and
+    # anything else outside the registry go through the search link
+    # (injection unchanged — R04 acceptance path).
+    #
+    # The shirt-color expressions were TRIED as vocabulary entries
+    # (publish colored persons under their expressions, R05 step 3
+    # first attempt) and demoted back to coverage after two failed
+    # mapping smokes. Measured failure modes, ~10 min exploration each:
+    #   * far-box mislocalization: a distant person's expression box
+    #     whose centre column crossed a nearer object planted
+    #     "person wearing a blue shirt" landmarks on the red person,
+    #     the trash can and a white person (n=8 each). The R05 height
+    #     gate in the localizer now kills these (92 blue drops in
+    #     smoke 2) — but not the second mode:
+    #   * color-collision force-matches ON the object: the ORANGE cone
+    #     label force-matched the RED-shirt person, the GREEN trash can
+    #     label the GREEN-shirt person, and blue beat "person" for
+    #     white persons via dedup priority (token-subset boxes agree,
+    #     the more specific label won). These boxes sit on the target
+    #     itself at the right size, so no geometric filter can reject
+    #     them.
+    # As coverage the expressions VETO exactly those force-matches
+    # (the red person's "person wearing a red shirt" coverage box
+    # disagrees with a "traffic cone" box on the same object) — the
+    # R02c/R04-proven mechanism. Colored persons map as plain "person"
+    # (their expression coverage box is a token-subset agreement).
+    #
+    # Other profiles (detector_config launch argument, runbook §7):
+    #   * la_detector_search_first.yaml — the R04 demo shape: empty
+    #     vocabulary, nothing maps, every command searches.
+    #   * la_detector_four_class.yaml — pre-R04 default, 4 world
+    #     classes only.
+    #   * la_detector_person_only.yaml — R02c acceptance profile.
+    vocabulary: ["person", "bookshelf", "trash can", "traffic cone",
+                 "concrete barrier"]
+
+    # ── Search-link injection ──────────────────────────────
+    # Latched String from the coordinator: a free-form expression to
+    # detect IN ADDITION to the base vocabulary ('' = none).
+    active_search_topic: "/active_search"
+
+    # ── Coverage categories (requested, filtered on, NEVER published) ──
+    # R02c smoke run 1 measured what shrinking the vocabulary does: with
+    # ["person"] alone the occlusion filter went blind to the three
+    # world objects, a mislocalized box chain promoted a fake person at
+    # the trash can and at the bookshelf, and the cone collected enough
+    # forced-choice "trash can" boxes (n=5) that the search navigated
+    # to the wrong object. These categories ride along in every /detect
+    # request so the geometric safety nets (occlusion filter, same-
+    # object veto) see those objects again — but their boxes are
+    # dropped before publishing, so the classes never reach memory
+    # until a search injects them. Set [] to disable (pure open-world).
+    # The node subtracts anything already in the effective vocabulary
+    # (including the active search term — a searched class must not
+    # veto itself).
+    #
+    # With the R05 vocabulary the effective coverage is the four
+    # shirt-color expressions. They carry two jobs:
+    #   * color-collision protection (R05): the cone label force-
+    #     matches the red-shirt person and the trash-can label the
+    #     green-shirt person (matching colors); the person's own
+    #     expression coverage box disagrees with those boxes and
+    #     vetoes them. Without this, ~10 min of exploration promoted
+    #     a "traffic cone" landmark ON the red person and a
+    #     "trash can" landmark ON the green person.
+    #   * correct-alternative set for color searches (R04 probe:
+    #     negatives 0/6 without the full color set, 12/12 with it —
+    #     reports/R04_probe/).
+    # The physical classes stay listed for profile-switching safety:
+    # the node subtracts anything already in the effective vocabulary,
+    # so they are harmless here and become real coverage again under a
+    # smaller-vocabulary profile.
+    coverage_categories: ["person", "bookshelf", "trash can", "traffic cone",
+                          "concrete barrier",
+                          "person wearing a green shirt",
+                          "person wearing a red shirt",
+                          "person wearing a blue shirt",
+                          "person wearing a white shirt"]
+
+    # ── Generation options (R06a) ──────────────────────────
+    # Sent with every /detect as "options". Measured on the R05 60-frame
+    # capture (reports/R06a_perception_latency.md §2):
+    #   * greedy (argmax with the model-card T/top_p sharpening kept —
+    #     temperature 0 breaks this checkpoint's MTP decoder) ==
+    #     sampling in latency, deterministic, reproduces 92% of the
+    #     sampled boxes; the lost ones are frame-edge person boxes.
+    #   * hybrid == fast on the median (~405 ms for 9 categories), but
+    #     hybrid's AR fallback churns on busy multi-person frames
+    #     (39-48 decode steps, one 132-step / 2.0 s outlier in the bag
+    #     replay) where fast stays at 28-29 steps → fast.
+    #   * token cap 16 + 24/category (~1.5x the longest real answer)
+    #     bounds runaway generations: greedy locks into a repeat loop on
+    #     rare frames (3 of ~400 replay requests; 6 s/frame uncapped),
+    #     and the server retries a capped greedy call once with sampling.
+    #   * gen_max_side 448 would save ~45 ms/frame but halves the
+    #     concrete-barrier recall (8 -> 4 of 60 frames) and drops far
+    #     shirt-colour boxes — stays at native 640.
+    gen_mode: "fast"
+    gen_greedy: true
+    gen_tokens_base: 16
+    gen_tokens_per_category: 24
+    gen_max_side: 0
+    # Two-phase coverage (expressions only requested when the primary
+    # request hit a person): measured no latency win (persons are in
+    # most frames) and worse boxes (blue over-fires 20 -> 31, the
+    # 5-term primary loses the barrier 8 -> 2) — left OFF.
+    two_phase_coverage: false
+    two_phase_terms: ["person wearing a green shirt",
+                      "person wearing a red shirt",
+                      "person wearing a blue shirt",
+                      "person wearing a white shirt"]
+    two_phase_trigger: "person"
+
+    # ── Sampling ───────────────────────────────────────────
+    # Server-side detect is ~0.2-0.3 s/frame (R01 §5.7); 0.3 s keeps at
+    # most ~3 requests/s and matches the YOLO node's effective rate.
+    min_interval_sec: 0.3
+    # Skip frames while the robot spins faster than this (rad/s, from
+    # /odom): motion blur plus the localizer's latest-scan bearing match
+    # make fast-rotation detections land on the wrong obstacle.
+    max_angular_vel: 0.5
+
+    # ── Frame-skip rules (R06a step 4) ─────────────────────
+    # (a) LiDAR-clear: fewer than skip_lidar_min_rays returns inside the
+    #     camera FOV are closer than skip_lidar_range_m → nothing the
+    #     planar localizer could hit inside the memory range gate, skip.
+    # (b) static: displacement since the last request < 0.2 m AND yaw
+    #     change < 10° → the view has not changed, skip.
+    # At least one request every skip_fallback_sec regardless; counts
+    # and the resulting skip rate are in the [la_stats] line.
+    skip_lidar_enabled: true
+    skip_lidar_range_m: 3.3
+    skip_lidar_min_rays: 3
+    skip_static_enabled: true
+    skip_static_dist_m: 0.2
+    skip_static_yaw_deg: 10.0
+    skip_fallback_sec: 2.0
+    camera_hfov_deg: 62.2
+    scan_topic: "/scan"
+
+    # ── Bearing-occlusion filter ───────────────────────────
+    # Drop a detection whose bbox centre column is spanned by a NEARER
+    # detection of another class (nearer = bottom edge >=8 px lower;
+    # everything here stands on the floor). The planar localizer casts
+    # the scan ray at the centre column, so such detections are
+    # guaranteed to be localized onto the occluder — run 1 measured the
+    # cone behind the centre person planting a fake "traffic cone"
+    # landmark on the person this way (R02b §4).
+    occlusion_filter: true
+
+    # ── Cross-class dedup ──────────────────────────────────
+    # The model can list one physical object under several vocabulary
+    # entries (R01 §2.3: armchair/chair cross-listing). Two boxes of
+    # DIFFERENT labels with IoU >= this are collapsed to the earlier
+    # vocabulary entry.
+    cross_class_iou: 0.8
+
+    # ── Coverage containment veto (R05) ────────────────────
+    # The coverage veto above compares boxes by IoU, which only sees
+    # WHOLE-object disagreements. R05 A1 measured the other shape: at
+    # 2.4-2.9 m the model boxed only the green SHIRT of the centre
+    # person and called it "trash can" (green, right apparent size —
+    # the height gate cannot reject it). That box is fully inside the
+    # "person wearing a green shirt" coverage box, but their IoU is far
+    # below 0.8, so the veto never fired; the fake trash-can candidate
+    # promoted ON the person and its cross-class mutex then blocked the
+    # real person observations — the green-shirt search that followed
+    # ran 310 s and ended NOT FOUND with its own candidate stuck at 4/5.
+    # A publishable box with at least this fraction of its area inside a
+    # DISAGREEING coverage box is vetoed as a part-of-a-whole mislabel.
+    # Known cost: a genuinely separate object whose box falls entirely
+    # within a coverage box is vetoed too — in practice a nearer object
+    # extends below the farther one's box, so containment stays < 1.
+    coverage_containment: 0.8
+
+    # ── Topics (absolute: the YOLO node's resolved names, so the
+    #    downstream chain and RViz need zero changes) ─────────
+    image_topic:        "/camera/image_raw"
+    odom_topic:         "/odom"
+    detections_topic:   "/detector_node/detections"
+    debug_image_topic:  "/detector_node/debug_image"
+
+    # ── Debug ──────────────────────────────────────────────
+    publish_debug_image: true
+    # Shift the overlay boxes by the odom yaw change since their image
+    # (R06a step 5): during a 0.4 rad/s turn the boxes lag ~10° (~100 px)
+    # for the ~0.4 s a /detect takes; with compensation they stay on
+    # the objects. Set false for the raw overlay.
+    debug_motion_comp: true
+
+    # ── Short-term tracking (R06a step 6) ───────────────────
+    # IoU >= track_iou_min association across consecutive results after
+    # the same yaw compensation; Detection2D.id carries the track number
+    # (annotation only — memory does not read it: a later fork's
+    # ByteTrack attempt (since reverted) let ids override the 1 m
+    # distance gate and doubled landmark confirmation time). A track is
+    # closed after track_max_missed consecutive misses or
+    # track_max_age_sec of silence; [track_stats] logs the length
+    # distribution.
+    tracking_enabled: true
+    track_iou_min: 0.3
+    track_max_missed: 2
+    track_max_age_sec: 2.0
+    jpeg_quality: 85
+    queue_size: 5
+    # One [la_stats] summary line per this many seconds (0 disables).
+    stats_interval_sec: 10.0

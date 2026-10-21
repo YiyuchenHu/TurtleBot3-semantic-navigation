@@ -33,9 +33,15 @@ def generate_launch_description():
             parameters=[
                 config,
                 {"use_sim_time": use_sim_time},
-                {"goal_assignment_node": {"ros__parameters": {
-                    "odom_topic": odom_topic,
-                }}},
+                # Flat {name: value} — a nested
+                # {"goal_assignment_node": {"ros__parameters": {...}}} dict is
+                # flattened by launch_ros into a literal dotted parameter name
+                # and the odom_topic launch argument silently did nothing. Note
+                # the subscription this feeds is an intentional no-op hook
+                # (goal_assignment_node.cpp odomCallback); the argument is kept
+                # working so the topic name stays overridable, not because pose
+                # comes from it.
+                {"odom_topic": odom_topic},
             ],
             output="screen",
         ),

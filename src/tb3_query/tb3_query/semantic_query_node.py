@@ -41,6 +41,9 @@ from ament_index_python.packages import get_package_share_directory
 
 from tb3_query.query_core import (
     MemoryObject,
+    attribute_expression,
+    canonicalize_expression,
+    extract_expression,
     load_target_mapping,
     parse_command,
     select_target,
@@ -71,6 +74,10 @@ class SemanticQueryNode(Node):
         self.declare_parameter("status_topic", "~/query_status")
         self.declare_parameter("semantic_targets_file", "")
         self.declare_parameter("output_frame", "base_link")
+        # Attribute resolution (R07): an expression that is not any
+        # landmark's class still resolves when a landmark carries it as an
+        # attribute with at least this many distinct detections.
+        self.declare_parameter("attribute_min_count", 2)
 
         mem_topic    = self.get_parameter("memory_topic").value
         cmd_topic    = self.get_parameter("command_topic").value
@@ -132,6 +139,10 @@ class SemanticQueryNode(Node):
                 x=det.bbox.center.position.x,
                 y=det.bbox.center.position.y,
                 confidence=det.results[0].hypothesis.score,
+                # results[1:] = attribute evidence attached by the map
+                # memory (label -> distinct detections)
+                attributes={r.hypothesis.class_id: float(r.hypothesis.score)
+                            for r in det.results[1:]},
             ))
         self._memory_objects = objs
 
@@ -142,34 +153,89 @@ class SemanticQueryNode(Node):
         parsed = parse_command(raw, self._known_targets)
 
         if parsed is None:
-            self._publish_failure(
-                raw, "", "",
-                f"unsupported semantic target in: '{raw}' "
-                f"(known: {sorted(self._known_targets)})"
-            )
-            return
-
-        semantic_name = parsed.semantic_name
-        detector_label = self._sem2det.get(semantic_name, "")
-        if not detector_label:
-            self._publish_failure(
-                raw, semantic_name, "",
-                f"no detector_label mapping for '{semantic_name}'"
-            )
-            return
-
-        if parsed.desired_index is not None:
+            # ── Open-vocabulary path (Phase 2c search link) ──────────────
+            # Not a registry target. If the text still reads as a
+            # navigation command, the remainder becomes a free-form
+            # expression: resolve it against memory by literal label
+            # (search-promoted landmarks carry the expression as their
+            # class), else suggest a vocabulary-injection search.
+            expression = extract_expression(raw)
+            if expression is None:
+                self._publish_failure(
+                    raw, "", "",
+                    f"unsupported semantic target in: '{raw}' "
+                    f"(known: {sorted(self._known_targets)})"
+                )
+                return
+            canon = canonicalize_expression(expression)
+            if canon != expression:
+                self.get_logger().info(
+                    "expression '%s' → '%s' (wording the detector grounds)"
+                    % (expression, canon))
+                expression = canon
+            semantic_name = expression
+            detector_label = expression
+            desired_index = None
             self.get_logger().info(
-                "Parsed: semantic='%s'  desired_index=%d"
-                % (semantic_name, parsed.desired_index)
-            )
+                "Open-vocabulary expression: '%s'" % expression)
+        else:
+            semantic_name = parsed.semantic_name
+            detector_label = self._sem2det.get(semantic_name, "")
+            if not detector_label:
+                self._publish_failure(
+                    raw, semantic_name, "",
+                    f"no detector_label mapping for '{semantic_name}'"
+                )
+                return
+            desired_index = parsed.desired_index
+            # ── Attribute-qualified class (R04) ──────────────────────────
+            # "find the person wearing a green shirt" token-matches the
+            # registry class `person`, but injecting plain "person" would
+            # stop the search at ANY person. Commands with attribute
+            # tokens beyond the class reference demote to the
+            # open-vocabulary expression path (full expression becomes
+            # the injected vocabulary word and the landmark class).
+            attr_expr = attribute_expression(raw, semantic_name,
+                                             detector_label)
+            if attr_expr is not None and desired_index is None:
+                canon = canonicalize_expression(attr_expr)
+                if canon != attr_expr:
+                    self.get_logger().info(
+                        "expression '%s' → '%s' (wording the detector grounds)"
+                        % (attr_expr, canon))
+                    attr_expr = canon
+                semantic_name = attr_expr
+                detector_label = attr_expr
+                self.get_logger().info(
+                    "Attribute-qualified '%s' → open-vocabulary "
+                    "expression: '%s'" % (parsed.semantic_name, attr_expr))
+            if desired_index is not None:
+                self.get_logger().info(
+                    "Parsed: semantic='%s'  desired_index=%d"
+                    % (semantic_name, desired_index)
+                )
 
         result = select_target(
             self._memory_objects,
             semantic_name,
             detector_label,
             raw,
-            desired_index=parsed.desired_index,
+            desired_index=desired_index,
+            attribute_min_count=int(self.get_parameter("attribute_min_count").value),
+        )
+
+        # ── Search suggestion (Phase 2c) ─────────────────────────────────
+        # The class has NO landmark at all and no specific index was
+        # requested → the coordinator can inject `detector_label` into the
+        # detect vocabulary and explore. With an index ("go to person 3")
+        # a search could not resolve WHICH instance, so it stays a plain
+        # failure. When landmarks exist, select_target already resolved
+        # per memory (nearest / by index) and no search is suggested.
+        search_suggested = (
+            not result.success
+            and desired_index is None
+            and not any(o.detector_label == detector_label
+                        for o in self._memory_objects)
         )
 
         out = SemanticQueryResult()
@@ -184,6 +250,8 @@ class SemanticQueryNode(Node):
         out.frame_id = self._out_frame
         out.confidence = float(result.confidence)
         out.status_message = result.status_message
+        out.search_suggested = search_suggested
+        out.search_label = detector_label if search_suggested else ""
 
         self._result_pub.publish(out)
 
@@ -196,6 +264,10 @@ class SemanticQueryNode(Node):
                 "Query OK: %s → %s at (%.2f, %.2f)"
                 % (semantic_name, result.object_id, result.x, result.y)
             )
+        elif search_suggested:
+            self.get_logger().info(
+                "Query MISS with search suggestion: inject '%s' "
+                "into the detect vocabulary" % detector_label)
         else:
             self.get_logger().warn("Query FAILED: %s" % result.status_message)
 

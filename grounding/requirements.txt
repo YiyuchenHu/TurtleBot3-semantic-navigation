@@ -1,0 +1,16 @@
+# mock backend (CPU, any OS):
+opencv-python-headless
+numpy
+
+# locate_anything backend (NVIDIA Ampere+ GPU, Linux) — versions pinned
+# per https://huggingface.co/nvidia/LocateAnything-3B. Install torch for
+# your CUDA version first, e.g.:
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+#
+# transformers==4.57.1
+# numpy==1.25.0
+# Pillow==11.1.0
+# opencv-python-headless==4.11.0.86
+# peft
+# decord==0.6.0
+# lmdb==1.7.5

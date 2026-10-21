@@ -1,0 +1,289 @@
+{
+  "image_root": "../captures",
+  "world": "warehouse_aws_semantic",
+  "notes": "Eval set for the AWS warehouse world (worlds/warehouse_aws_semantic.world). Ground-truth pixel bboxes were labeled from frames captured at the poses in ../viewpoints.example.json (2026-07-22). If you re-capture from different poses, re-label (capture_frames.py --annotate gives YOLO suggestions). Viewpoints: chairs_front (chair_blue + chair_red both in frame), sofa_zone (sofa_orange with box_blue on top, box_blue_floor and box_red on the floor nearby), shelf_aisle (AWS shelf with box_yellow visible), pallet_jack (pallet jack prop), person (person_standing).",
+  "cases": [
+    {
+      "id": "rec_chair",
+      "mode": "ground",
+      "capability": "identity",
+      "image": "chairs_front.jpg",
+      "query": "chair",
+      "ground_truth": {
+        "gt_bbox_xyxy": [
+          51,
+          46,
+          224,
+          268
+        ],
+        "note": "gt = chair_red (largest chair in frame); real backend returns all instances so chair_blue also hits via any-box IoU"
+      }
+    },
+    {
+      "id": "rec_box",
+      "mode": "ground",
+      "capability": "identity",
+      "image": "sofa_zone.jpg",
+      "query": "box",
+      "ground_truth": {
+        "gt_bbox_xyxy": [
+          205,
+          75,
+          302,
+          162
+        ],
+        "note": "gt = box_blue on the sofa; any-box IoU, no distractors"
+      }
+    },
+    {
+      "id": "rec_sofa",
+      "mode": "ground",
+      "capability": "identity",
+      "image": "sofa_zone.jpg",
+      "query": "sofa",
+      "ground_truth": {
+        "gt_bbox_xyxy": [
+          160,
+          88,
+          350,
+          260
+        ]
+      }
+    },
+    {
+      "id": "rec_shelf",
+      "mode": "ground",
+      "capability": "identity",
+      "image": "shelf_aisle.jpg",
+      "query": "shelf",
+      "ground_truth": {
+        "gt_bbox_xyxy": [
+          55,
+          0,
+          640,
+          265
+        ],
+        "note": "left portion of the rack is occluded by chair_blue at the frame edge"
+      }
+    },
+    {
+      "id": "rec_pallet_jack",
+      "mode": "ground",
+      "capability": "identity",
+      "image": "pallet_jack.jpg",
+      "query": "pallet jack",
+      "ground_truth": {
+        "gt_bbox_xyxy": [
+          55,
+          0,
+          510,
+          272
+        ]
+      }
+    },
+    {
+      "id": "rec_person",
+      "mode": "ground",
+      "capability": "identity",
+      "image": "person.jpg",
+      "query": "person",
+      "ground_truth": {
+        "gt_bbox_xyxy": [
+          283,
+          0,
+          330,
+          246
+        ]
+      }
+    },
+    {
+      "id": "color_blue_chair",
+      "mode": "ground",
+      "capability": "color",
+      "image": "chairs_front.jpg",
+      "query": "the blue chair",
+      "ground_truth": {
+        "gt_bbox_xyxy": [
+          459,
+          133,
+          565,
+          253
+        ],
+        "distractor_bboxes": [
+          [
+            51,
+            46,
+            224,
+            268
+          ]
+        ],
+        "note": "gt = chair_blue; distractor = chair_red in the same frame"
+      }
+    },
+    {
+      "id": "color_red_chair",
+      "mode": "ground",
+      "capability": "color",
+      "image": "chairs_front.jpg",
+      "query": "the red chair",
+      "ground_truth": {
+        "gt_bbox_xyxy": [
+          51,
+          46,
+          224,
+          268
+        ],
+        "distractor_bboxes": [
+          [
+            459,
+            133,
+            565,
+            253
+          ]
+        ],
+        "note": "gt = chair_red; distractor = chair_blue"
+      }
+    },
+    {
+      "id": "color_orange_sofa",
+      "mode": "ground",
+      "capability": "color",
+      "image": "sofa_zone.jpg",
+      "query": "the orange sofa",
+      "ground_truth": {
+        "gt_bbox_xyxy": [
+          160,
+          88,
+          350,
+          260
+        ]
+      }
+    },
+    {
+      "id": "color_yellow_box",
+      "mode": "ground",
+      "capability": "color",
+      "image": "shelf_aisle.jpg",
+      "query": "the yellow box",
+      "ground_truth": {
+        "gt_bbox_xyxy": [
+          62,
+          172,
+          192,
+          268
+        ],
+        "note": "gt = box_yellow; NO distractor listed: the shelf rack itself is yellow and encloses the box region, so a distractor bbox would overlap gt and break the margin logic. A color-only backend may legitimately lock onto the shelf beams \u2014 that is an informative miss."
+      }
+    },
+    {
+      "id": "spatial_blue_box_on_sofa",
+      "mode": "ground",
+      "capability": "spatial",
+      "image": "sofa_zone.jpg",
+      "query": "the blue box on top of the orange sofa",
+      "ground_truth": {
+        "gt_bbox_xyxy": [
+          205,
+          75,
+          302,
+          162
+        ],
+        "distractor_bboxes": [
+          [
+            558,
+            172,
+            640,
+            262
+          ]
+        ],
+        "note": "gt = box_blue sitting ON sofa_orange; distractor = box_blue_floor (same color, wrong place) \u2014 the whole point of this case"
+      }
+    },
+    {
+      "id": "spatial_box_next_to_sofa",
+      "mode": "ground",
+      "capability": "spatial",
+      "image": "sofa_zone.jpg",
+      "query": "the box on the floor next to the sofa",
+      "ground_truth": {
+        "gt_bbox_xyxy": [
+          0,
+          178,
+          80,
+          260
+        ],
+        "distractor_bboxes": [
+          [
+            205,
+            75,
+            302,
+            162
+          ]
+        ],
+        "note": "gt = box_red on the floor beside the sofa; distractor = box_blue ON the sofa. box_blue_floor deliberately NOT listed: in this frame it also sits on the floor near the sofa, so it is an ambiguous rather than wrong answer."
+      }
+    },
+    {
+      "id": "rank_blue_chair",
+      "mode": "rank",
+      "capability": "color",
+      "query": "the blue chair",
+      "candidates": [
+        {
+          "id": "chair_blue",
+          "image": "chairs_front.jpg",
+          "ref_bbox_xyxy": [
+            459,
+            133,
+            565,
+            253
+          ]
+        },
+        {
+          "id": "chair_red",
+          "image": "chairs_front.jpg",
+          "ref_bbox_xyxy": [
+            51,
+            46,
+            224,
+            268
+          ]
+        }
+      ],
+      "ground_truth": {
+        "expected_winner": "chair_blue"
+      }
+    },
+    {
+      "id": "rank_blue_box_on_sofa",
+      "mode": "rank",
+      "capability": "spatial",
+      "query": "the blue box on top of the orange sofa",
+      "candidates": [
+        {
+          "id": "box_blue_on_sofa",
+          "image": "sofa_zone.jpg",
+          "ref_bbox_xyxy": [
+            205,
+            75,
+            302,
+            162
+          ]
+        },
+        {
+          "id": "box_blue_floor",
+          "image": "sofa_zone.jpg",
+          "ref_bbox_xyxy": [
+            558,
+            172,
+            640,
+            262
+          ]
+        }
+      ],
+      "ground_truth": {
+        "expected_winner": "box_blue_on_sofa"
+      }
+    }
+  ]
+}

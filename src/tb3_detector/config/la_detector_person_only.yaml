@@ -1,0 +1,54 @@
+# ============================================================
+# tb3_detector — la_detector_node ACCEPTANCE PROFILE (R02c)
+# ============================================================
+# Same node, same parameters as la_detector.yaml, but the vocabulary is
+# shrunk to ["person"]: bookshelf, trash can and traffic cone become
+# OPEN-VOCABULARY targets that the search link must discover on demand
+# ("go to the trash can" → Query MISS → /active_search injection →
+# SEARCHING → promotion at n=5 → navigation). This is the exact
+# configuration the R02c end-to-end search acceptance ran under.
+#
+# Use it to DEMO the search link; use la_detector.yaml (4-class
+# default) for everyday runs where all objects map during exploration.
+#
+# Select at launch time (see docs/la_runbook.md §7):
+#   ros2 launch tb3_coordinator full_semantic_nav_la.launch.py \
+#     detector_config:=/home/ubuntu/ws/src/tb3_detector/config/la_detector_person_only.yaml
+#
+# Keep every OTHER parameter identical to la_detector.yaml — the two
+# files are meant to differ in `vocabulary` only. Parameter rationale
+# comments live in la_detector.yaml; they are not duplicated here.
+
+la_detector_node:
+  ros__parameters:
+    server_url: "http://127.0.0.1:8801"
+    request_timeout_sec: 5.0
+
+    # THE difference from la_detector.yaml: only person is a mapping
+    # class; everything else is found via /active_search injection.
+    vocabulary: ["person"]
+
+    active_search_topic: "/active_search"
+
+    # With the shrunk vocabulary these are NOT inert (unlike in the
+    # 4-class default): they keep the occlusion filter and same-object
+    # veto sighted on the three world objects. Never disable them in
+    # this profile — R02c smoke run 1 measured what happens (fake
+    # person landmarks at the trash can and bookshelf, search navigated
+    # to the wrong object).
+    coverage_categories: ["bookshelf", "trash can", "traffic cone"]
+
+    min_interval_sec: 0.3
+    max_angular_vel: 0.5
+    occlusion_filter: true
+    cross_class_iou: 0.8
+
+    image_topic:        "/camera/image_raw"
+    odom_topic:         "/odom"
+    detections_topic:   "/detector_node/detections"
+    debug_image_topic:  "/detector_node/debug_image"
+
+    publish_debug_image: true
+    jpeg_quality: 85
+    queue_size: 5
+    stats_interval_sec: 10.0

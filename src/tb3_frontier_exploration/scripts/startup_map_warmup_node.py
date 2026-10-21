@@ -4,6 +4,10 @@ One-shot startup scan: pure rotation on cmd_vel to seed SLAM / frontier quality 
 
 Sequence: delay → turn left ~45° → pause → return to heading → pause → turn right ~45° → pause → return.
 Then publishes latched std_msgs/Bool true on exploration_warmup_complete (or param topic).
+
+R07: with wait_for_exploration_enabled (default true) the delay only starts
+once /exploration_enabled has been seen true (latched), so the robot stands
+still until the coordinator's first search command enables exploration.
 """
 
 import math
@@ -35,6 +39,8 @@ class StartupMapWarmupNode(Node):
         self.declare_parameter("scan_angle_deg", 45.0)
         self.declare_parameter("scan_angular_speed", 0.4)
         self.declare_parameter("timer_rate_hz", 50.0)
+        self.declare_parameter("wait_for_exploration_enabled", True)
+        self.declare_parameter("exploration_enabled_topic", "/exploration_enabled")
 
         self._cmd_topic = self.get_parameter("cmd_vel_topic").get_parameter_value().string_value
         self._complete_topic = (
@@ -64,6 +70,16 @@ class StartupMapWarmupNode(Node):
         self._phase_start = self.get_clock().now()
         self._published_done = False
 
+        self._wait_enabled = bool(
+            self.get_parameter("wait_for_exploration_enabled").get_parameter_value().bool_value)
+        self._enabled_seen = not self._wait_enabled
+        self._enabled_logged = False
+        if self._wait_enabled:
+            self.create_subscription(
+                Bool,
+                self.get_parameter("exploration_enabled_topic").get_parameter_value().string_value,
+                self._on_exploration_enabled, qos)
+
         rate = float(self.get_parameter("timer_rate_hz").get_parameter_value().double_value)
         if rate <= 0.0:
             rate = 50.0
@@ -80,6 +96,12 @@ class StartupMapWarmupNode(Node):
                 self._cmd_topic,
             )
         )
+
+    def _on_exploration_enabled(self, msg: Bool) -> None:
+        if msg.data and not self._enabled_seen:
+            self._enabled_seen = True
+            self._phase_start = self.get_clock().now()
+            self.get_logger().info("Warmup: exploration enabled — starting the scan")
 
     def _phase_elapsed(self) -> float:
         return (self.get_clock().now() - self._phase_start).nanoseconds / 1e9
@@ -103,6 +125,12 @@ class StartupMapWarmupNode(Node):
         dt = self._phase_elapsed()
 
         if self._phase == self._PH_INIT_WAIT:
+            if not self._enabled_seen:
+                if not self._enabled_logged:
+                    self._enabled_logged = True
+                    self.get_logger().info(
+                        "Warmup: standing still until /exploration_enabled is true")
+                return
             self._send_stop()
             if dt >= self._startup_delay:
                 self.get_logger().info("Warmup: turn left ~45°")

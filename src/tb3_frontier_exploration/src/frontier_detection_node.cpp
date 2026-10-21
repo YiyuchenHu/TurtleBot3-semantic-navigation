@@ -72,7 +72,12 @@ public:
     declare_parameter<std::string>("frontiers_markers_topic", "/frontiers_markers");
     declare_parameter<std::string>("frame_id", "map");
     declare_parameter<int>("min_cluster_size", 5);
-    declare_parameter<int>("cost_threshold", 128);
+    // Compared against /global_costmap/costmap, an OccupancyGrid whose known
+    // cells only ever carry 0..100 (Nav2 translates raw 253 -> 99 inscribed,
+    // 254 -> 100 lethal, 255 -> -1 unknown). 98 therefore rejects exactly the
+    // inscribed and lethal cells and nothing else. Anything above 100 disables
+    // the cost test entirely, which is what the previous 128/150 defaults did.
+    declare_parameter<int>("cost_threshold", 98);
     declare_parameter<bool>("use_costmap_filter", true);
     declare_parameter<bool>("publish_raw_markers", true);
     declare_parameter<bool>("publish_rejected_markers", true);
@@ -84,10 +89,17 @@ public:
     std::string frontiers_topic = get_parameter("frontiers_topic").as_string();
     std::string markers_topic = get_parameter("frontiers_markers_topic").as_string();
 
+    // Both /map (slam_toolbox) and /global_costmap/costmap (Nav2) are published
+    // TRANSIENT_LOCAL. Subscribing VOLATILE still connects, but drops the
+    // latched frame that is already on the wire at connect time, so this node
+    // stayed blind until the next periodic republish. goal_assignment_node
+    // already subscribes to the costmap this way; match it here.
+    auto latched_qos = rclcpp::QoS(1).transient_local().reliable();
     map_sub_ = create_subscription<nav_msgs::msg::OccupancyGrid>(
-      map_topic, 10, std::bind(&FrontierDetectionNode::mapCallback, this, std::placeholders::_1));
+      map_topic, latched_qos, std::bind(&FrontierDetectionNode::mapCallback, this, std::placeholders::_1));
     costmap_sub_ = create_subscription<nav_msgs::msg::OccupancyGrid>(
-      costmap_topic, 10, std::bind(&FrontierDetectionNode::costmapCallback, this, std::placeholders::_1));
+      costmap_topic, latched_qos,
+      std::bind(&FrontierDetectionNode::costmapCallback, this, std::placeholders::_1));
 
     frontiers_pub_ = create_publisher<geometry_msgs::msg::PoseArray>(frontiers_topic, 10);
     markers_pub_ = create_publisher<visualization_msgs::msg::MarkerArray>(markers_topic, 10);
@@ -301,7 +313,10 @@ private:
    *
    * @param wx World x (meters), same frame as costmap `header.frame_id` / map frame.
    * @param wy World y (meters).
-   * @return Cost value 0–255 as stored in the costmap cell, 255 if out of bounds, or -1 if no costmap yet.
+   * @return 0..100 for a known cell (the OccupancyGrid scale Nav2 publishes), 255 for a cell the costmap
+   *   marks unknown (grid -1, which the unsigned-char cast below turns into 255), 255 if out of bounds,
+   *   or -1 if no costmap has arrived yet. Note the two different 255s and the single -1: only "no costmap
+   *   at all" reaches the caller as a negative value.
    *
    * Pipeline role:
    * - Thin wrapper for callers that only need the cost value, not the discretized map coordinates.
@@ -345,8 +360,11 @@ ros2 launch tb3_frontier_exploration exploration.launch.py use_sim_time:=true
    * Notes:
    * - Assumes costmap `data` is row-major matching `nav_msgs/OccupancyGrid` layout.
    * - World and costmap must be aligned (same global frame) for meaningful costs; TF is not handled here.
-   * - Return -1 is overloaded to mean “unknown / no data” and is treated as accept in `mapCallback` when
-   *   filtering is on (see `use_costmap_filter` branch with `cost < 0`).
+   * - Return -1 means “no costmap received yet” only, and `mapCallback` treats it as accept (see the
+   *   `use_costmap_filter` branch with `cost < 0`). A cell the costmap itself marks unknown does NOT come
+   *   back negative: the `unsigned char` cast maps grid -1 to 255, which is above any `cost_threshold` in
+   *   the 0..100 range and is therefore rejected. That unknown/out-of-bounds rejection is the only part of
+   *   this filter that was ever active while `cost_threshold` sat on the raw 0-255 scale.
    */
   int getCostAtWorldWithIndices(double wx, double wy, int & out_mx, int & out_my) const
   {
