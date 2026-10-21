@@ -1,0 +1,159 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1560 940" width="1560" height="940" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif">
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#1a1a1a"/>
+    </marker>
+    <style>
+      .panel { fill:#FBF3D5; stroke:#E6D58C; stroke-width:1.5; }
+      .hdr { font-size:17px; font-weight:700; fill:#1a1a1a; }
+      .box { fill:#E4E0F6; stroke:#5A46C8; stroke-width:1.6; }
+      .term { fill:#ffffff; stroke:#1a1a1a; stroke-width:1.6; }
+      .t { font-size:16px; fill:#111111; text-anchor:middle; }
+      .s { font-size:13px; fill:#555555; text-anchor:middle; }
+      .lbl { font-size:14px; fill:#1a1a1a; }
+      .ln { fill:none; stroke:#1a1a1a; stroke-width:1.6; }
+    </style>
+  </defs>
+
+  <rect width="1560" height="940" fill="#ffffff"/>
+
+  <text x="40" y="56" font-size="35" font-weight="700" fill="#111">YOLOv8n inside the TurtleBot3 semantic-navigation stack</text>
+  <text x="40" y="88" font-size="16" fill="#444">Map first, query later: the robot explores from start-up and builds semantic landmarks; a command then picks one from memory and Nav2 drives there.</text>
+
+  <!-- panels -->
+  <rect class="panel" x="40" y="120" width="360" height="400"/>
+  <rect class="panel" x="420" y="120" width="340" height="400"/>
+  <rect class="panel" x="780" y="120" width="360" height="400"/>
+  <rect class="panel" x="1160" y="120" width="360" height="570"/>
+  <rect class="panel" x="40" y="580" width="1100" height="230"/>
+
+  <text class="hdr" x="56" y="146">① Exploration (mapping)</text>
+  <text class="hdr" x="436" y="146">② Perception</text>
+  <text class="hdr" x="796" y="146">③ Localization &amp; semantic memory</text>
+  <text class="hdr" x="1176" y="146">④ Query (on a command)</text>
+  <text class="hdr" x="56" y="606">⑤ Navigation</text>
+
+  <!-- loop: exploration resumes (drawn first so boxes sit on top) -->
+  <path class="ln" d="M1340,656 V850 H8 V365 H58" marker-end="url(#arr)"/>
+  <path class="ln" d="M1010,718 V850"/>
+  <rect x="455" y="839" width="290" height="22" fill="#ffffff"/>
+  <text class="lbl" x="600" y="855" text-anchor="middle">exploration resumes after 3 s</text>
+
+  <!-- P1 -->
+  <rect class="term" x="90" y="164" width="260" height="54" rx="27"/>
+  <text class="t" x="220" y="188">Start-up</text>
+  <text class="s" x="220" y="207">exploration begins at once</text>
+  <path class="ln" d="M220,218 V240" marker-end="url(#arr)"/>
+
+  <rect class="box" x="60" y="242" width="320" height="66" rx="8"/>
+  <text class="t" x="220" y="269">SLAM Toolbox</text>
+  <text class="t" x="220" y="292">LiDAR + odometry → map + pose</text>
+  <path class="ln" d="M220,308 V330" marker-end="url(#arr)"/>
+
+  <rect class="box" x="60" y="332" width="320" height="66" rx="8"/>
+  <text class="t" x="220" y="359">Frontier detection</text>
+  <text class="t" x="220" y="382">nearest unexplored edge</text>
+  <path class="ln" d="M220,398 V420" marker-end="url(#arr)"/>
+
+  <rect class="box" x="60" y="422" width="320" height="66" rx="8"/>
+  <text class="t" x="220" y="449">Nav2</text>
+  <text class="t" x="220" y="472">drives the robot there</text>
+
+  <!-- new views -->
+  <path class="ln" d="M380,455 H410 V193 H438" stroke-dasharray="6 5" marker-end="url(#arr)"/>
+  <text class="s" x="406" y="330" transform="rotate(-90 406 330)" dy="-5">new views</text>
+
+  <!-- P2 -->
+  <rect class="box" x="440" y="160" width="300" height="66" rx="8"/>
+  <text class="t" x="590" y="187">Camera frame</text>
+  <text class="t" x="590" y="210">every image the robot sees</text>
+  <path class="ln" d="M590,226 V250" marker-end="url(#arr)"/>
+
+  <rect x="440" y="252" width="300" height="114" rx="10" fill="#0F766E"/>
+  <text x="590" y="282" font-size="19" font-weight="700" fill="#ffffff" text-anchor="middle">YOLOv8n</text>
+  <text x="590" y="305" font-size="15" font-weight="700" fill="#B5F0E3" text-anchor="middle">80 COCO classes, runs on the CPU</text>
+  <text x="590" y="330" font-size="15" fill="#ffffff" text-anchor="middle">kept: person, bench</text>
+  <text x="590" y="351" font-size="15" fill="#ffffff" text-anchor="middle">confidence ≥ 0.12</text>
+  <path class="ln" d="M590,366 V388" marker-end="url(#arr)"/>
+
+  <rect class="box" x="440" y="390" width="300" height="66" rx="8"/>
+  <text class="t" x="590" y="417">Boxes + labels</text>
+  <text class="t" x="590" y="440" font-size="15">"bench" stands for the table</text>
+
+  <!-- boxes -> P3 -->
+  <path class="ln" d="M740,423 H770 V200 H798" marker-end="url(#arr)"/>
+
+  <!-- P3 -->
+  <rect class="box" x="800" y="160" width="320" height="80" rx="8"/>
+  <text class="t" x="960" y="186">Camera–LiDAR localizer</text>
+  <text class="t" x="960" y="208" font-size="14">box bearing in the 62.2° camera FOV</text>
+  <text class="t" x="960" y="228" font-size="14">+ median LiDAR range of ±10 rays → (x, y)</text>
+  <path class="ln" d="M960,240 V260" marker-end="url(#arr)"/>
+
+  <rect class="box" x="800" y="262" width="320" height="66" rx="8"/>
+  <text class="t" x="960" y="289">Short-term memory</text>
+  <text class="t" x="960" y="312" font-size="15">same label within 1.0 m → one ID</text>
+  <path class="ln" d="M960,328 V348" marker-end="url(#arr)"/>
+
+  <rect class="box" x="800" y="350" width="320" height="120" rx="8"/>
+  <text class="t" x="960" y="376">Landmark memory</text>
+  <text class="t" x="960" y="399" font-size="14">promoted after ≥ 8 observations (person)</text>
+  <text class="t" x="960" y="420" font-size="14">or ≥ 4 (bench), seen within 2.5 m / 2.0 m,</text>
+  <text class="t" x="960" y="441" font-size="14">snapped to an obstacle on the SLAM map</text>
+  <text class="s" x="960" y="461">person_0, person_1, …, bench_0</text>
+
+  <!-- landmarks -> query (data) -->
+  <path class="ln" d="M1120,445 H1150 V371 H1178" stroke-dasharray="6 5" marker-end="url(#arr)"/>
+  <text class="s" x="1146" y="408" transform="rotate(-90 1146 408)" dy="-5">landmarks</text>
+
+  <!-- P4 -->
+  <rect class="term" x="1210" y="164" width="260" height="54" rx="27"/>
+  <text class="t" x="1340" y="188">Command: go to person 3</text>
+  <text class="s" x="1340" y="207">any time, on /user_command</text>
+  <path class="ln" d="M1340,218 V240" marker-end="url(#arr)"/>
+
+  <rect class="box" x="1180" y="242" width="320" height="66" rx="8"/>
+  <text class="t" x="1340" y="269">Coordinator</text>
+  <text class="t" x="1340" y="292" font-size="15">pauses exploration, forwards the command</text>
+  <path class="ln" d="M1340,308 V336" marker-end="url(#arr)"/>
+
+  <rect class="box" x="1180" y="338" width="320" height="66" rx="8"/>
+  <text class="t" x="1340" y="365">Rule-based query (no LLM)</text>
+  <text class="t" x="1340" y="388" font-size="15">nearest X, or X_N by its memory index</text>
+  <path class="ln" d="M1340,404 V436" marker-end="url(#arr)"/>
+
+  <polygon class="box" points="1340,438 1470,492 1340,546 1210,492"/>
+  <text class="t" x="1340" y="487">X in landmark</text>
+  <text class="t" x="1340" y="508">memory?</text>
+  <path class="ln" d="M1340,546 V598" marker-end="url(#arr)"/>
+  <text class="lbl" x="1350" y="580">no</text>
+
+  <rect class="term" x="1230" y="600" width="220" height="56" rx="28"/>
+  <text class="t" x="1340" y="624">TARGET_FAILED</text>
+  <text class="s" x="1340" y="643">no active X in memory</text>
+
+  <!-- D1 yes -> approach -->
+  <path class="ln" d="M1210,492 H1150 V560 H440 V655" marker-end="url(#arr)"/>
+  <text class="lbl" x="1176" y="483">yes</text>
+  <rect x="735" y="549" width="130" height="22" fill="#ffffff"/>
+  <text class="lbl" x="800" y="565" text-anchor="middle">X is on the map</text>
+
+  <!-- P5 -->
+  <rect class="box" x="300" y="657" width="280" height="66" rx="8"/>
+  <text class="t" x="440" y="684">Approach pose</text>
+  <text class="t" x="440" y="707">0.5 m stand-off, facing X</text>
+  <path class="ln" d="M580,690 H618" marker-end="url(#arr)"/>
+
+  <rect class="box" x="620" y="657" width="250" height="66" rx="8"/>
+  <text class="t" x="745" y="684">Nav2 NavigateToPose</text>
+  <text class="t" x="745" y="707">60 s goal timeout</text>
+  <path class="ln" d="M870,690 H898" marker-end="url(#arr)"/>
+
+  <rect class="term" x="900" y="662" width="220" height="56" rx="28"/>
+  <text class="t" x="1010" y="686">TARGET_REACHED</text>
+  <text class="s" x="1010" y="705">robot stops in front of X</text>
+
+  <!-- footer -->
+  <text x="40" y="892" font-size="15" fill="#444">Numbers are the values in this branch's config files. Landmark IDs such as person_3 are memory slots in observation order, not identities.</text>
+  <text x="40" y="916" font-size="15" fill="#444">Difference from main: here the robot maps first and is queried later; on main the command comes first, and exploration is the search (LocateAnything-3B).</text>
+</svg>
