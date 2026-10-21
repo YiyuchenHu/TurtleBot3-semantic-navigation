@@ -98,7 +98,7 @@
   <text x="960" y="282" font-size="19" font-weight="700" fill="#ffffff" text-anchor="middle">LocateAnything-3B</text>
   <text x="960" y="305" font-size="15" font-weight="700" fill="#B5F0E3" text-anchor="middle">the only perception model, no YOLO</text>
   <text x="960" y="330" font-size="15" fill="#ffffff" text-anchor="middle">frame + vocabulary → labelled 2D boxes</text>
-  <text x="960" y="351" font-size="15" fill="#ffffff" text-anchor="middle">~0.4 s per call</text>
+  <text x="960" y="351" font-size="15" fill="#ffffff" text-anchor="middle">~0.5 s per call</text>
   <path class="ln" d="M960,366 V388" marker-end="url(#arr)"/>
 
   <rect class="box" x="800" y="390" width="320" height="66" rx="8"/>
@@ -119,11 +119,12 @@
   <text class="t" x="1340" y="300">same object across frames → one ID</text>
   <path class="ln" d="M1340,316 V338" marker-end="url(#arr)"/>
 
-  <rect class="box" x="1180" y="340" width="320" height="88" rx="8"/>
+  <rect class="box" x="1180" y="340" width="320" height="110" rx="8"/>
   <text class="t" x="1340" y="366">Landmark memory</text>
-  <text class="t" x="1340" y="389" font-size="15">confirmed after ≥ 8 sightings in ≥ 3 frames,</text>
-  <text class="t" x="1340" y="411" font-size="15">pinned to the map with the SLAM pose</text>
-  <path class="ln" d="M1340,428 V506" marker-end="url(#arr)"/>
+  <text class="t" x="1340" y="389" font-size="14">confirmed after ≥ 3 distinct detections</text>
+  <text class="t" x="1340" y="410" font-size="14">(≥ 8 observations; ≥ 3 for a new word X),</text>
+  <text class="t" x="1340" y="431" font-size="14">pinned to the map with the SLAM pose</text>
+  <path class="ln" d="M1340,450 V506" marker-end="url(#arr)"/>
 
   <polygon class="box" points="1340,508 1470,562 1340,616 1210,562"/>
   <text class="t" x="1340" y="557">Landmark of X</text>
@@ -163,5 +164,5 @@
 
   <!-- footer -->
   <text x="40" y="892" font-size="15" fill="#444">LocateAnything-3B replaces the YOLO detector and also finds the object named in the command. SLAM, exploration, localization, memory and Nav2 are the original stack (ROS 2 Humble, Gazebo Classic).</text>
-  <text x="40" y="916" font-size="15" fill="#444">Difference from the homework: there the robot maps first and is queried later; here the command comes first, and exploration is the search for X.</text>
+  <text x="40" y="916" font-size="15" fill="#444">Difference from the YOLO branches: there the robot maps first and is queried later; here the command comes first, and exploration is the search for X.</text>
 </svg>
