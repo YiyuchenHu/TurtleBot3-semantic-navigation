@@ -7,7 +7,13 @@ object with Nav2.
 
 Perception is a **YOLO26n detector fine-tuned on data collected in this
 simulation** (three classes: `person`, `trash_can`, `chair`; labels come from
-Gazebo ground truth). It runs on a **CPU** (about 32 ms per 640×480 frame on a
+Gazebo ground truth). Fine-tuning was needed because COCO-pretrained YOLO
+is unreliable on these Gazebo models: it reports the trash can as a
+`traffic light`, and it misses the chair from some viewing angles. On a held-out
+test set rendered in the same simulator, fine-tuning raised AP50 for
+`trash_can` from 0.35 (COCO weights, with `traffic light` counted as a trash
+can) to 0.995 and for `chair` from 0.73 to 0.995; the network and its CPU cost
+are unchanged. It runs on a **CPU** (about 32 ms per 640×480 frame on a
 laptop i7), so no GPU is needed, and the stack runs on **Ubuntu 22.04
 natively, on macOS through Docker, and on Windows through WSL 2**.
 
@@ -34,10 +40,9 @@ branch.
 This version served as the reference implementation for a Lehigh University
 robotics course assignment; the student version is at
 <https://github.com/YiyuchenHu/turtlebot3-gazebo-navigation-hw>.
-[INSTRUCTIONS.md](INSTRUCTIONS.md) is that assignment sheet: its acceptance
-criteria are what `scripts/acceptance_run.sh` checks. Design rationale,
-measured results and how the detector was trained are in
-[NOTES.md](NOTES.md).
+`scripts/acceptance_run.sh` runs the whole stack unattended and passes when
+`go to person 0`, `go to trash can` and `go to chair` each end with the robot
+within 1.2 m of the real object.
 
 ## Repository layout
 
@@ -167,7 +172,6 @@ single terminal without touching the others.
   (clean restart, the Nav2 spin-in-place wedge, chair/trash-can mix-ups).
 - **Build details, other worlds, the one-command launch, and where to change
   things** → [docs/running-reference.md](docs/running-reference.md).
-- **Why it is built this way, and the measured results** → [NOTES.md](NOTES.md).
 
 ## License
 

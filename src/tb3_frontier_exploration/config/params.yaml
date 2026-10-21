@@ -72,9 +72,9 @@ goal_assignment_node:
     failed_goal_avoidance_radius: 1.0
     # Failed goals are kept as a TIME-LIMITED SET, not one slot. The single
     # slot let a failing fallback goal overwrite a failing frontier goal and
-    # re-arm it, producing a 40 s limit cycle that never ended
-    # (NOTES.md 7.8). TTL is what re-admits a goal that only failed because
-    # the map was still unknown there.
+    # re-arm it, producing a 40 s limit cycle that never ended.
+    # TTL is what re-admits a goal that only failed because the map was
+    # still unknown there.
     failed_goal_ttl_sec: 90.0
     failed_goal_max_entries: 64
 

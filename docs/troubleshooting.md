@@ -58,7 +58,7 @@ above, then re-open T1–T5 in order. It clears on restart. The map and any
 landmarks built so far are lost, so the robot re-explores from scratch.
 
 Do **not** try to fix this by lowering `conf_threshold` or widening
-`class_filter` — they are unrelated; see [NOTES.md](../NOTES.md).
+`class_filter` — they are unrelated.
 
 ## `go to chair` keeps failing and RViz shows a `trash_can` marker on the chair
 
@@ -71,7 +71,7 @@ chair never appears as `chair_0`; instead a second trash-can marker
 shipped detector labels the chair as a trash can with high confidence, and if
 that wrong label reaches the promotion threshold first it is what gets
 promoted. It happened in 0 of 8 reference runs with the shipped settings, so
-it is rare, but it does occur. Details are in [NOTES.md §8.1](../NOTES.md).
+it is rare, but it does occur.
 
 **It now corrects itself — wait before restarting.** A landmark keeps a count
 per label, so the chair observations that keep arriving are recorded against

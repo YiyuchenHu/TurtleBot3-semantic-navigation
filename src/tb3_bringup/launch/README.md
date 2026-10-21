@@ -21,7 +21,7 @@ T6 is a plain shell — no launch file — used to publish `/user_command`.
 | File | Purpose |
 |---|---|
 | `full_stack.launch.py` | All five of the above in one process with fixed start-up delays. For demos and smoke tests; wrong for development, because one log stream and no per-subsystem restart. |
-| `detector_test.launch.py` | Static self-test world (`detector_test.world`) for the Stage-1 YOLO check in INSTRUCTIONS Step 4. Gazebo only — no SLAM, Nav2 or course nodes. |
+| `detector_test.launch.py` | Static self-test world (`detector_test.world`) for checking the detector in isolation. Gazebo only — no SLAM, Nav2 or the semantic-navigation nodes. |
 
 ## Which file do I edit?
 

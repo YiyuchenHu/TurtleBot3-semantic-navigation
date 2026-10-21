@@ -9,10 +9,9 @@ detector_node:
     # ── Model ──────────────────────────────────────────────
     # tb3det_yolo26n.pt ships with the repository (5.4 MB, exempted from the
     # *.pt ignore rule in models/.gitignore): yolo26n fine-tuned on 9600
-    # Gazebo frames of the three course targets (NOTES.md, "How the detector
-    # was trained"). Relative paths are resolved from <pkg_share>/models/.
+    # Gazebo frames of the three targets (see the README). Relative paths are resolved from <pkg_share>/models/.
     # The COCO yolo26n.pt it replaced is still a local download and can be
-    # swapped back in here for the comparison experiment in NOTES.md; if you
+    # swapped back in here to compare the two; if you
     # do, class_filter below must become ["person", "traffic light", "chair"].
     # CPU cost is identical (same architecture): 31.8 vs 32.4 ms median per
     # 640x480 frame on an i7-12700H, measured with scripts/bench_detector_cpu.py.

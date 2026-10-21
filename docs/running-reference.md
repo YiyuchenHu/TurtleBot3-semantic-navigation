@@ -18,8 +18,8 @@ to the version this repository was validated with, and `python3-yaml` comes
 with ROS.
 
 **Optional COCO weights.** The shipped `tb3det_yolo26n.pt` is a fine-tuned
-model. The COCO `yolo26n.pt` it replaced is only needed for the comparison
-experiment in [NOTES.md](../NOTES.md) (git-ignored):
+model. The COCO `yolo26n.pt` it replaced is only needed to compare the two
+(git-ignored):
 
 ```bash
 wget -O src/tb3_detector/models/yolo26n.pt \
@@ -93,11 +93,11 @@ Four files cover almost every edit. Everything is under `src/`.
 | **Use a different world** | `src/tb3_bringup/worlds/*.world`, and `WORLD_PRESETS` in `src/tb3_bringup/launch/sim.launch.py` to give it a `world:=` alias and a spawn pose | Objects the world places must exist in `src/tb3_bringup/models/`; add a new prop there first |
 | **Add or rename a semantic target** | `src/tb3_bringup/config/semantic_targets.yaml` | The one registry mapping `semantic_name` ↔ `detector_label` ↔ Gazebo model. Add the detector label to `class_filter` in `detector.yaml` too |
 | **Tune detector thresholds** | `src/tb3_detector/config/detector.yaml` | `conf_threshold`, `class_filter`, `device`. `class_filter` takes detector labels (`"trash_can"`, or `"traffic light"` with the COCO weights), never semantic names |
-| **Tune exploration / goal assignment** | `src/tb3_frontier_exploration/config/params.yaml` | Frontier size, goal spacing, blacklist TTL. The thresholds interlock — see NOTES.md |
+| **Tune exploration / goal assignment** | `src/tb3_frontier_exploration/config/params.yaml` | Frontier size, goal spacing, blacklist TTL. The thresholds interlock, so change one at a time |
 | **Tune memory, query, approach pose** | `src/tb3_memory/config/`, `src/tb3_query/config/`, `src/tb3_nav_adapter/config/`, `src/tb3_coordinator/config/` | One YAML per package, named after the node it configures |
 | **Change RViz layout** | `src/tb3_bringup/rviz/semantic_nav.rviz` | Opened by `nav.launch.py`; `use_rviz:=false` turns it off |
 | **Change which nodes start** | `src/tb3_bringup/launch/` | One launch file per terminal; `src/tb3_bringup/launch/README.md` maps each to its terminal |
-| **Change detection code** | `src/tb3_detector/tb3_detector/detector_core.py` | `load()` and `infer()`; training details in [NOTES.md](../NOTES.md) §6.5 |
+| **Change detection code** | `src/tb3_detector/tb3_detector/detector_core.py` | `load()` and `infer()` |
 
 **`build/`, `install/` and `log/` are generated — do not read them and do not
 edit them.** `colcon build` writes all three from `src/`; `install/` holds

@@ -4,4 +4,4 @@ Stage 4: rule-based command parsing. Turns text on `/user_command` — `go to pe
 
 - **Node:** `semantic_query_node` — Terminal 3, via `tb3_bringup/launch/backend.launch.py`
 - **Config:** [`config/semantic_query.yaml`](config/semantic_query.yaml) for topics and output frame. The recognised target names come from `tb3_bringup/config/semantic_targets.yaml` — the one place to add or rename a target
-- **Docs:** [README](../../README.md) · [INSTRUCTIONS](../../INSTRUCTIONS.md) · [NOTES](../../NOTES.md)
+- **Docs:** [README](../../README.md)

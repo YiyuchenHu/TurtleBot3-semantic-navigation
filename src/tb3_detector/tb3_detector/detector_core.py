@@ -151,7 +151,7 @@ class DetectorCore:
         after a fresh checkout run colcon build --symlink-install
         --packages-select tb3_detector so the file is copied into the install
         tree, or pass an absolute model_path. The COCO comparison weights are
-        a local download (see NOTES.md).
+        a local download (see src/tb3_detector/models/README.md).
         """
         if not _ULTRALYTICS_AVAILABLE:
             raise RuntimeError(

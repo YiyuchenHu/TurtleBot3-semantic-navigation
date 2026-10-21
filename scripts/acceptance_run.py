@@ -97,7 +97,7 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # NOTE ON THE FIVE-PERSON WORLD.  `person_centre` stands at Gazebo (0, 0) and the
 # map frame coincides with the world frame, so its landmark's map coordinates are
 # ~(0, 0) too.  tb3_nav_adapter's compute_approach_pose treats those map
-# coordinates as robot-relative (a documented simplification -- NOTES.md 5.1),
+# coordinates as robot-relative (a documented simplification, see src/tb3_nav_adapter/README.md),
 # computes dist = hypot(x, y) from the MAP ORIGIN, finds it below
 # min_standoff_distance and returns None; nav_goal_adapter_node then logs
 # "too close, skipping goal" and publishes nothing, and the coordinator waits in
@@ -157,16 +157,16 @@ WORLDS: Dict[str, dict] = {
 }
 
 # The three-target world is the DEFAULT because it is the one the acceptance
-# criteria are written against and the one the reference run in NOTES.md 6.1 was
-# measured on.  sim.launch.py's own default is warehouse_models_person; that
+# criteria are written against and the one the reference runs were measured
+# on.  sim.launch.py's own default is warehouse_models_person; that
 # world is still selectable with --world, but see the note above WORLDS for why
 # a figure standing on the map origin cannot be navigated to by this stack.
 DEFAULT_WORLD = "warehouse_models"
 ROBOT_ENTITY = "waffle_pi"                  # Gazebo entity name of the robot
 
-# Acceptance bar, from INSTRUCTIONS.md: "the robot ends within 1.2 m of the real
-# object".  Keep this in step with INSTRUCTIONS.md -- the script must score the
-# criterion the course states, not a more comfortable one.
+# Acceptance bar: "the robot ends within 1.2 m of the real object" (README).
+# Keep this in step with the README -- the script must score the stated
+# criterion, not a more comfortable one.
 #
 # It was 1.0 m and is now 1.2 m, because 1.0 m did not cover the error budget of
 # a correctly working stack: approach_distance 0.5 m + Nav2's xy_goal_tolerance
@@ -174,7 +174,7 @@ ROBOT_ENTITY = "waffle_pi"                  # Gazebo entity name of the robot
 # near surface, not the object centre -- 0.15-0.36 m measured on the chair) sums
 # to ~1.1 m worst case.  One six-run series had a run where all three commands
 # reported TARGET_REACHED and every landmark was in tolerance, scored FAIL only
-# because the chair finished at 1.04 m.  See NOTES.md 6.1.1.
+# because the chair finished at 1.04 m.
 #
 # The raw final_distance is always printed and written to JSON, so a regression
 # is visible as a number well before it crosses the bar.
@@ -182,14 +182,14 @@ PASS_DISTANCE_M = 1.2
 
 # nav_goal_adapter.yaml: min_standoff_distance 0.3, approach_distance 0.5.  A
 # landmark closer to the map origin than their sum cannot produce a usable Nav2
-# goal through the adapter's current frame assumption (NOTES.md 5.1).
+# goal through the adapter's current frame assumption (tb3_nav_adapter README).
 MIN_STANDOFF_M = 0.3
 APPROACH_DISTANCE_M = 0.5
 MIN_GOAL_RADIUS_M = MIN_STANDOFF_M + APPROACH_DISTANCE_M
 
 # A landmark further than this from every candidate ground-truth object is not
-# that object.  Derived from the measured landmark errors (0.02-0.20 m in
-# NOTES.md 6.1) with a wide margin; the retired stop sign managed 4.38 m.
+# that object.  Derived from the measured landmark errors (0.02-0.20 m in the
+# reference run) with a wide margin; the retired stop sign managed 4.38 m.
 MAX_LANDMARK_ERROR_M = 0.5
 
 # ---------------------------------------------------------------------------

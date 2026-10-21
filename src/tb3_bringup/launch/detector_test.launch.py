@@ -1,8 +1,8 @@
 """
 detector_test.launch.py — Standalone: Gazebo with detector_test.world.
 
-Not part of the six-terminal flow; this is the Stage-1 YOLO self-test
-world from INSTRUCTIONS Step 4.
+Not part of the six-terminal flow; a static world for checking the
+detector in isolation.
 
 Usage:
     export TURTLEBOT3_MODEL=burger   # or waffle / waffle_pi

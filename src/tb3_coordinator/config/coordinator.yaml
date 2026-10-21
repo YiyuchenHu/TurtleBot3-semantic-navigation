@@ -116,7 +116,7 @@ semantic_map_memory_node:
     # so 12 separated them cleanly and is still far below the real support.
     # The fine-tuned tb3det_yolo26n weights confirm landmarks much faster and
     # have not produced a swap; the thresholds are deliberately left at 12
-    # until a separate tuning round lowers them (see NOTES.md).
+    # until a separate tuning round lowers them.
     chair_min_observations:    12
     trash_can_min_observations: 12
     wall_boundary_margin_m:   0.20

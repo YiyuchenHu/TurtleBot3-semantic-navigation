@@ -138,8 +138,6 @@ Each of the README's six terminals is a WSL tab. Windows Terminal opens one
 with `Ctrl-Shift-T`, or run `wsl` in any new tab. The four preparation lines
 the README puts at the top of every terminal apply unchanged.
 
-`INSTRUCTIONS.md` and `NOTES.md` apply unchanged.
-
 ## What to expect on WSL 2
 
 WSL 2 is a real virtual machine with GPU access, so the simulation runs at
@@ -175,9 +173,8 @@ Notes on those numbers:
   with it closed — the difference is noise, and the real-time factor is capped
   at 1.0 either way).
 - **The detector benchmark drifts upward** across repeated runs on a laptop
-  (35.4 → 38.4 → 44.0 ms in one session) as the CPU heats up. NOTES.md §6.4
-  reports the same effect on the native machine. Compare first runs to first
-  runs.
+  (35.4 → 38.4 → 44.0 ms in one session) as the CPU heats up; the native machine
+  shows the same effect. Compare first runs to first runs.
 - **Nav2's documented spin-in-place wedge happens here too**, at about the
   same rate as anywhere else: 1 of 10 cold starts logged
   `Failed to make progress` and recovered on its own. [docs/troubleshooting.md](troubleshooting.md)

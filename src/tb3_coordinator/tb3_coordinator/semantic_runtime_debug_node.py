@@ -47,7 +47,7 @@ class SemanticRuntimeDebugNode(Node):
 
     # detector_label -> semantic_name, so the table can print both.  The COCO
     # alias is kept so the node still counts correctly if someone runs the
-    # optional COCO yolo26n comparison (NOTES.md), where the trash can is
+    # optional COCO yolo26n comparison, where the trash can is
     # reported as "traffic light".
     SEMANTIC_NAME = {
         "person": "person",

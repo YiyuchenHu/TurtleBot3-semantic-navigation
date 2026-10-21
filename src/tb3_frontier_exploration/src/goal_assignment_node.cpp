@@ -91,7 +91,7 @@ public:
     // The single slot was the direct cause of the 40 s limit cycle: a frontier
     // goal failed and was recorded, the fallback goal then failed and
     // OVERWROTE that record, which re-armed the very frontier that had just
-    // failed. See NOTES.md 7.8 for the full cycle and the two-part fix.
+    // failed.
     declare_parameter<double>("failed_goal_ttl_sec", 90.0);
     declare_parameter<int>("failed_goal_max_entries", 64);
     declare_parameter<double>("exploration_complete_log_interval", 5.0);

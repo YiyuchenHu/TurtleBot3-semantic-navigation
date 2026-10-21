@@ -118,8 +118,6 @@ does the same without the `cd`.)
   to T6 in order, each in its own `docker compose exec tb3 bash` tab.
   [docs/running-reference.md](running-reference.md) and
   [docs/troubleshooting.md](troubleshooting.md) apply unchanged in the container.
-- [INSTRUCTIONS.md](../INSTRUCTIONS.md) applies unchanged; its Step 1 apt/pip
-  part is what the image already did.
 
 ## Day to day
 
@@ -163,8 +161,8 @@ What that means in practice:
 - **Behaviour is otherwise unchanged.** In the reference run the
   six-terminal flow, exploration, landmark promotion and `go to trash can`
   (`TARGET_REACHED`, exploration resumed) all worked with no changes, and no
-  node crashed. The acceptance criteria in INSTRUCTIONS.md are about where
-  the robot ends up, not how fast it gets there.
+  node crashed. The acceptance run scores where the robot ends up, not how
+  fast it gets there.
 - **Rosetta can, rarely, kill a process** with `Illegal instruction` — the
   same glitch described under Troubleshooting for the build. It did not
   happen during the reference run; if a terminal's launch dies that way,
