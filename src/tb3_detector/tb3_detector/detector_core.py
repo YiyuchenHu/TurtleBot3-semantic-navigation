@@ -161,7 +161,10 @@ class DetectorCore:
         if not self.model_path.is_file():
             raise FileNotFoundError(
                 f"Model file not found: {self.model_path}\n"
-                "► See INSTRUCTIONS.md → model download step."
+                "► Rebuild tb3_detector so models/tb3det_yolo26n.pt reaches "
+                "install/ (README → Setup by platform, step 4). Other weights, "
+                "e.g. the COCO yolo26n.pt, are a separate download: see "
+                "src/tb3_detector/models/README.md."
             )
 
         logger.info("Loading YOLO26 model from %s on device=%s", self.model_path, self.device)

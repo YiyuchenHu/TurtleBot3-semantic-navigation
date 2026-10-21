@@ -1243,7 +1243,8 @@ def unreachable_reason(bridge: Bridge, spec: dict) -> Optional[str]:
     if radius >= MIN_GOAL_RADIUS_M:
         return None
     return ("%s is %.2f m from the map origin, inside the nav adapter's "
-            "%.2f m minimum (NOTES.md 5.1): no goal pose can be produced"
+            "%.2f m minimum (see src/tb3_nav_adapter/README.md): no goal pose "
+            "can be produced"
             % (lm_id, radius, MIN_GOAL_RADIUS_M))
 
 
@@ -1404,7 +1405,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
 
   ./scripts/acceptance_run.sh --world warehouse_models_person
       The five-figure world. Person commands only, and any figure standing on
-      the map origin is reported SKIPPED (see NOTES.md 5.1).
+      the map origin is reported SKIPPED (see src/tb3_nav_adapter/README.md).
 
   ./scripts/acceptance_run.sh --timeout-scale 2
       Same, with every timeout and wait doubled for a slow machine.
@@ -1520,7 +1521,8 @@ def check_weights() -> None:
         die("detector weights %s not found at\n"
             "            %s\n"
             "            Rebuild tb3_detector (colcon build --symlink-install "
-            "--packages-select tb3_detector) -- see INSTRUCTIONS.md, Step 1."
+            "--packages-select tb3_detector) -- see README.md, Setup by "
+            "platform, step 4."
             % (name, installed))
 
 

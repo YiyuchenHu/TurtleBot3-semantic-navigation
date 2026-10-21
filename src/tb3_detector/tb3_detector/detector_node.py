@@ -194,7 +194,8 @@ class DetectorNode(Node):
         except Exception as exc:
             self.get_logger().error("DetectorCore failed to load: %s" % exc)
             self.get_logger().error(
-                "► Check INSTRUCTIONS.md: are ultralytics/torch installed, and "
+                "► Check README → Setup by platform, steps 2 and 4: are "
+                "ultralytics/torch installed, and "
                 "was tb3_detector rebuilt so models/tb3det_yolo26n.pt reached install/?"
             )
             raise
