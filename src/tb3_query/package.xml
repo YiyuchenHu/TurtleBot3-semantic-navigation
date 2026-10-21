@@ -8,7 +8,7 @@
     Stage-4 perception: semantic query node that resolves text commands
     against semantic memory to select a target object for navigation.
   </description>
-  <maintainer email="user@todo.todo">Your Name</maintainer>
+  <maintainer email="yiyuchenhu@gmail.com">Yiyuchen Hu</maintainer>
   <license>Apache-2.0</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>

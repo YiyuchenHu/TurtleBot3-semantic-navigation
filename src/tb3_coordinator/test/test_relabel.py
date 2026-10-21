@@ -24,8 +24,8 @@ sys.path.insert(0, os.path.join(
 from tb3_coordinator.semantic_map_memory_node import (  # noqa: E402
     Landmark, should_relabel)
 
-# Thresholds of the course-repo run this replay is based on (the repo the
-# relabel rule was ported from). This repo's own coordinator.yaml ships
+# Thresholds of the run this replay is based on (a later fork of this stack,
+# which the relabel rule was ported from). This repo's own coordinator.yaml ships
 # person: 8, bench: 4, stop_sign: 5 — the rule itself is class-agnostic,
 # so the historical chair/trash_can replay still exercises it faithfully.
 MIN_OBS = {"person": 8, "chair": 12, "trash_can": 12}

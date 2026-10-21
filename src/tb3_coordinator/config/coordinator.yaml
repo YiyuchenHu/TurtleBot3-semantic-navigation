@@ -146,7 +146,7 @@ semantic_map_memory_node:
     # ── Promotion ──────────────────────────────────────────
     # Generic fallback (any class without a class-specific override
     # below uses this). Raised 3 → 8 in Phase 2b for the same reason
-    # person went 3 → 8 in the course repo: with the LocateAnything
+    # person went 3 → 8 in a later fork of this stack: with the LocateAnything
     # vocabulary the fallback governs the open-vocabulary classes
     # (bookshelf / trash can / traffic cone), and at 3 a run-1 ghost
     # ("traffic cone_3", 3 stray mislocalized observations) became a

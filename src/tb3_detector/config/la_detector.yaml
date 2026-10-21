@@ -210,8 +210,8 @@ la_detector_node:
     # ── Short-term tracking (R06a step 6) ───────────────────
     # IoU >= track_iou_min association across consecutive results after
     # the same yaw compensation; Detection2D.id carries the track number
-    # (annotation only — memory does not read it: the course repo's
-    # ByteTrack attempt, 35cd85d/c6e2ea2, let ids override the 1 m
+    # (annotation only — memory does not read it: a later fork's
+    # ByteTrack attempt (since reverted) let ids override the 1 m
     # distance gate and doubled landmark confirmation time). A track is
     # closed after track_max_missed consecutive misses or
     # track_max_age_sec of silence; [track_stats] logs the length

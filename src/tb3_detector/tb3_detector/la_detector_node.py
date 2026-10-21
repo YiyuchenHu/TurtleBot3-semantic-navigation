@@ -164,8 +164,8 @@ class BoxTracker:
     consecutive results or fall silent for `max_age_sec` are closed and
     their length (number of results they were seen in) recorded.
 
-    Deliberately NOT ByteTrack (course repo 35cd85d, reverted in
-    c6e2ea2): there the track id was used by tb3_memory to merge
+    Deliberately NOT ByteTrack (tried in a later fork of this stack and
+    reverted): there the track id was used by tb3_memory to merge
     observations the 1 m distance gate would have rejected, positions
     wandered and landmark confirmation took twice as long. Here the id
     only annotates Detection2D.id; memory logic is unchanged.
