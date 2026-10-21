@@ -19,7 +19,7 @@ setup(
     maintainer="Yiyuchen Hu",
     maintainer_email="yiyuchenhu@gmail.com",
     description="Stage-2 perception: LiDAR + camera fusion planar localizer for TB3.",
-    license="Apache-2.0",
+    license="MIT",
     tests_require=["pytest"],
     entry_points={
         "console_scripts": [

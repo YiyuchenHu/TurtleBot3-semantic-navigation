@@ -20,7 +20,7 @@ setup(
     maintainer="Yiyuchen Hu",
     maintainer_email="yiyuchenhu@gmail.com",
     description="Lightweight coordinator for TB3 semantic navigation.",
-    license="Apache-2.0",
+    license="MIT",
     tests_require=["pytest"],
     entry_points={
         "console_scripts": [

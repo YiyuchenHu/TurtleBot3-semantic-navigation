@@ -5,7 +5,7 @@
   <version>0.1.0</version>
   <description>TurtleBot3 frontier-based autonomous exploration (frontier detection + goal assignment)</description>
   <maintainer email="yiyuchenhu@gmail.com">Yiyuchen Hu</maintainer>
-  <license>Apache-2.0</license>
+  <license>MIT</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 

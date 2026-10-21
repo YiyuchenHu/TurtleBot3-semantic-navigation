@@ -10,7 +10,7 @@
     target navigation.
   </description>
   <maintainer email="yiyuchenhu@gmail.com">Yiyuchen Hu</maintainer>
-  <license>Apache-2.0</license>
+  <license>MIT</license>
 
   <buildtool_depend>ament_python</buildtool_depend>
 
