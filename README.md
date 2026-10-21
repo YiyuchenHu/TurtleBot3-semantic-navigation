@@ -7,7 +7,7 @@ If the object is not in the room, it reports `TARGET NOT FOUND`.
 
 ![go to the traffic cone: search, FOUND, REACHED; then two targets already in memory](docs/media/la_demo_A.gif)
 
-[Full demo (MP4)](https://github.com/YiyuchenHu/TurtleBot3-semantic-navigation/releases/download/v1.0/demo_final.mp4)
+[Full demo (MP4)](https://drive.google.com/file/d/18F5ohdnKwmt9mzpMIQ4fdjLsyu8toZMJ/view?usp=sharing)
 · Gazebo simulation · ROS 2 Humble · Nav2 · SLAM Toolbox
 
 ## How it works
