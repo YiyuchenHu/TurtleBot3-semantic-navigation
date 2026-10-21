@@ -10,7 +10,7 @@ log/
 __pycache__/
 *.py[cod]
 
-# local-only (per task brief): never commit
+# local-only: never commit
 reports/
 CLAUDE.md
 
@@ -23,3 +23,20 @@ src/tb3_frontier_exploration/models/person_*_shirt/
 
 # Claude Code local settings
 .claude/
+
+# Local-only documentation (kept on disk, not published)
+/docs/la_runbook.md
+/docs/quickstart.md
+/src/tb3_frontier_exploration/docs/GOAL_ASSIGNMENT_STATE_AND_DEBUG.md
+/src/tb3_frontier_exploration/docs/GOAL_ASSIGNMENT_TESTING.md
+/grounding/eval/README.md
+/grounding/eval/manifest_schema.md
+/src/tb3_detector/README.md
+/src/tb3_detector/models/README.md
+/src/tb3_frontier_exploration/docs/FRONTIER_DETECTION_NODE_DESIGN.md
+/src/tb3_frontier_exploration/docs/GOAL_ASSIGNMENT_NODE_DESIGN.md
+/src/tb3_frontier_exploration/worlds/README.md
+/src/tb3_localizer/README.md
+/src/tb3_memory/README.md
+/src/tb3_nav_adapter/README.md
+/src/tb3_query/README.md

@@ -15,7 +15,7 @@
 | **3** | **Size of each cluster**; if below `min_cluster_size` the cluster is skipped | `[frontier] 3. cluster[0] size=8`, `skipped (below min_cluster_size)` |
 | **4** | **Geometric centroid** of each kept cluster (used as representative point), world (x, y) | `[frontier] 4. cluster[0] centroid (representative): (2.100, -0.500)` |
 | **6** | For each **candidate centroid**: world coords, **costmap indices (mx, my)**, and **sampled cost value** | `[frontier] 6. candidate[0] world=(2.100, -0.500) costmap_idx=(42, 31) cost=0` |
-| **8** | Whether the candidate is **ACCEPTED** or **REJECTED** and why (no filter, cost&lt;0, or cost vs threshold) | `[frontier] 8. candidate[0] ACCEPTED (cost 0 <= threshold 128)` |
+| **8** | Whether the candidate is **ACCEPTED** or **REJECTED** and why (too close to the costmap edge, no filter, cost&lt;0, or cost vs threshold) | `[frontier] 8. candidate[0] ACCEPTED (cost 0 <= threshold 98)` |
 | **9** | **Final number of safe published frontiers** (poses in `/frontiers` PoseArray) | `[frontier] 9. final safe published frontiers: 3` |
 
 Each cycle also prints one **INFO** summary line, e.g.:
@@ -39,9 +39,10 @@ Work through in order:
    - **Suggestion:** Look at each cluster size in step 3; if many clusters are just below `min_cluster_size`, try **lowering `min_cluster_size`** or check whether resolution/inflation is breaking frontiers into many small clusters.
 
 3. **Steps 6 and 8**  
-   - If you have multiple centroids but step 8 shows most as **REJECTED (cost X > threshold 128)**, the costmap has high cost at those positions (obstacle or inflation).  
-   - **Suggestion:** Check each candidate’s `costmap_idx` and `cost`; to allow more frontiers, **increase `cost_threshold`** or review costmap inflation/layers.  
-   - If `cost=-1` or the costmap is not ready, the current logic treats the candidate as ACCEPTED (no filter or invalid cost counts as pass).
+   - If you have multiple centroids but step 8 shows most as **REJECTED (cost X > threshold 98)**, the costmap has high cost at those positions. `cost=255` means the point is outside the costmap or on a cell the costmap marks unknown; 99/100 are inscribed/lethal.  
+   - **REJECTED (too close to costmap edge ...)** means the centroid lies within `costmap_edge_margin` cells of the costmap border.  
+   - **Suggestion:** Check each candidate’s `costmap_idx` and `cost`; the default `cost_threshold` of 98 already accepts the whole inflation gradient (raising it further accepts inscribed/lethal cells), so to allow more frontiers lower `costmap_edge_margin` or review costmap inflation/layers. If you run with a lower threshold, raise it.  
+   - `cost=-1` means no costmap has been received yet; the candidate is then ACCEPTED, as it is when `use_costmap_filter` is false.
 
 4. **Step 9**  
    - **Final safe published frontiers** is the number of poses actually published to `/frontiers`.  
