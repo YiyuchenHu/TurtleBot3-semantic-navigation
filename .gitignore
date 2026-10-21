@@ -9,3 +9,7 @@ log/
 # Python
 __pycache__/
 *.py[cod]
+
+# local-only notes (not published)
+src/tb3_frontier_exploration/docs/GOAL_ASSIGNMENT_STATE_AND_DEBUG.md
+src/tb3_frontier_exploration/docs/GOAL_ASSIGNMENT_TESTING.md
