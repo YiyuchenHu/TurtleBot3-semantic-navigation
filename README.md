@@ -49,7 +49,7 @@ branch runs the same stack with YOLOv8n.
 **Requirements**
 
 - Linux host with an X11 desktop session (Gazebo and RViz open as windows on it)
-- NVIDIA GPU with at least 14 GB of memory (the grounding server alone uses about 13 GB)
+- NVIDIA GPU with at least 14 GB of memory (measured on an RTX 5090: about 10 GB for the grounding server, 13 GB for the whole GPU with Gazebo, RViz and the desktop)
 - NVIDIA driver 570 or newer, and the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)
 - Docker with the Compose plugin; about 30 GB of free disk space
 
@@ -98,22 +98,29 @@ Give it about 30 s. The robot then waits in place for a command.
 
 ```bash
 docker compose -f docker/compose.yaml -f docker/compose.local.yaml exec sim bash
-ros2 topic pub -1 -w 1 /user_command std_msgs/msg/String "{data: 'go to the traffic cone'}"
+ros2 topic pub -1 -w 1 --keep-alive 2 /user_command std_msgs/msg/String "{data: 'go to the traffic cone'}"
 ros2 topic echo /coordinator_node/status
 ```
 
 The status goes through `[SEARCHING]` and `[SEMANTIC_NAV]` to
-`[TARGET_REACHED] Nav2 goal succeeded — target reached` (a few minutes; the
-robot has to find the cone first). Wait for a final status before sending the
-next command, for example:
+`[TARGET_REACHED] Nav2 goal succeeded — target reached` and then
+`[IDLE] holding position after TARGET_REACHED — send a new command`
+(one to a few minutes, as the robot has to find the cone first). Wait for the
+`[IDLE]` line, stop `echo` with Ctrl-C, and send the next command, for example:
 
 ```bash
-ros2 topic pub -1 -w 1 /user_command std_msgs/msg/String "{data: 'find a bicycle'}"
+ros2 topic pub -1 -w 1 --keep-alive 2 /user_command std_msgs/msg/String "{data: 'find a bicycle'}"
 ```
 
-There is no bicycle in the room, so after exploring and patrolling this one
-ends in `[TARGET_FAILED] TARGET NOT FOUND: ...`.
-A command needs a verb (`go to`, `find`, `navigate to`, ...) followed by the
+There is no bicycle in the room, so this one ends in
+`[TARGET_FAILED] TARGET NOT FOUND: 'bicycle' — exploration complete, nothing promoted`
+and then `[IDLE] holding position after TARGET_FAILED — send a new command`.
+It takes longer, often 5–15 minutes: the robot first explores the whole room
+and then patrols four waypoints before it gives up.
+
+`--keep-alive 2` keeps the publisher up long enough for the single message to
+be delivered; without it a command is occasionally lost. Send each command
+once: a second copy counts as a new command. A command needs a verb (`go to`, `find`, `navigate to`, ...) followed by the
 object. Stop everything with
 `docker compose -f docker/compose.yaml -f docker/compose.local.yaml down`
 (the weights and the build stay in their volumes).
