@@ -1,0 +1,43 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd"
+            schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>tb3_query</name>
+  <version>0.1.0</version>
+  <description>
+    Stage-4 perception: semantic query node that resolves text commands
+    against semantic memory to select a target object for navigation.
+  </description>
+  <maintainer email="yiyuchenhu@gmail.com">Yiyuchen Hu</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <buildtool_depend>ament_cmake_python</buildtool_depend>
+  <buildtool_depend>rosidl_default_generators</buildtool_depend>
+
+  <depend>rclpy</depend>
+  <depend>std_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>vision_msgs</depend>
+
+  <exec_depend>rosidl_default_runtime</exec_depend>
+
+  <!-- No <exec_depend>tb3_bringup</exec_depend>, deliberately. This package
+       reads semantic_targets.yaml, which ships in tb3_bringup/config, but
+       tb3_bringup already exec_depends on tb3_query (its launch files start
+       semantic_query_node, and tb3_coordinator / tb3_nav_adapter build
+       against the messages defined here). Declaring the reverse edge makes
+       colcon refuse to order the workspace at all. The path is supplied by
+       backend.launch.py instead; when the node is started bare its fallback
+       resolves tb3_bringup at run time and reports a clear error if the
+       file is missing. -->
+
+  <member_of_group>rosidl_interface_packages</member_of_group>
+
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

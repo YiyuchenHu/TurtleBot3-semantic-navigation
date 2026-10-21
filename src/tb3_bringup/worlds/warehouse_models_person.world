@@ -1,0 +1,206 @@
+<?xml version="1.0" ?>
+<!--
+  warehouse_models_person.world — 6 m × 6 m enclosed room with 5 person
+  figures, sized to match the TurtleBot3 LDS-01 LiDAR.
+
+  ════════════════════════════════════════════════════════════════════
+  Why 6×6 (not 6×10 like the original)?
+  ════════════════════════════════════════════════════════════════════
+  TurtleBot3's default LDS-01 has a max effective range of ~3.5 m.
+  In the previous 6×10 layout, the centre of the room sat 5 m from
+  the north and south walls, so a robot anywhere near the middle
+  saw only the two parallel east/west walls — a classic infinite
+  corridor that left scan-matching translationally ambiguous along
+  the long axis. Coupled with chassis pitch on collisions (which
+  briefly tilts the LiDAR plane and rasterizes the floor as fake
+  obstacles), this produced the "broken occupancy patches in the
+  middle" + "duplicate person ghosts" we observed in RViz.
+
+  6 m × 6 m fixes this geometrically: the centre of the room is
+  exactly 3 m from every wall, so the bot always has at least three
+  sides within LDS range plus visible corners — scan matching is
+  now well-conditioned everywhere.
+
+  ════════════════════════════════════════════════════════════════════
+  Geometry
+  ════════════════════════════════════════════════════════════════════
+  Inner clearance: X ∈ [-3, 3], Y ∈ [-3, 3] (6 m × 6 m).
+  Walls: thickness 0.2 m, height 2.5 m, outer faces at ±3.1 m.
+
+  ════════════════════════════════════════════════════════════════════
+  Person layout
+  ════════════════════════════════════════════════════════════════════
+  Five `person_standing` instances. Corner figures sit 1.0 m off
+  every nearby wall, leaving room for Nav2's inflation layer to
+  produce reachable goals next to each person. Each corner person's
+  yaw points toward the room centre so the figure is detectable
+  from any approach angle.
+
+    Position (x, y)   Yaw (rad)   Faces        Notes
+    ────────────────  ──────────  ───────────  ──────────────────
+    ( 2.0,  2.0)      -2.3562     toward (0,0) NE corner (-3π/4)
+    (-2.0,  2.0)      -0.7854     toward (0,0) NW corner (-π/4)
+    (-2.0, -2.0)       0.7854     toward (0,0) SW corner ( π/4)
+    ( 2.0, -2.0)       2.3562     toward (0,0) SE corner ( 3π/4)
+    ( 0.0,  0.0)       0          +X            Centre
+
+  Inter-person distance is at least 2.83 m (centre↔corner) and
+  4.0 m (corner↔corner along an axis), comfortably above the
+  semantic memory `merge_distance` of 1.5 m, so legitimate persons
+  cannot be accidentally merged.
+
+  ════════════════════════════════════════════════════════════════════
+  Robot spawn
+  ════════════════════════════════════════════════════════════════════
+  Recommended (set automatically when this world is selected via
+  the `world:=warehouse_models_person` alias): (-2.5, 0.0), facing +X.
+  Rationale:
+    * 0.5 m off the west wall   → scan visible against W wall.
+    * 2.06 m to NW / SW persons → both inside LDS range from t=0.
+    * 2.50 m to centre person   → already in detector range.
+    * 5.50 m to NE / SE persons → outside LDS range, will be
+      observed once the bot translates toward them. This is the
+      desired exploration progression.
+-->
+<sdf version="1.6">
+  <world name="warehouse_models_person">
+
+    <!-- Standard lighting -->
+    <include>
+      <uri>model://sun</uri>
+    </include>
+
+    <!-- Infinite ground plane -->
+    <include>
+      <uri>model://ground_plane</uri>
+    </include>
+
+    <!-- Physics: stable real-time factor -->
+    <physics type="ode">
+      <real_time_factor>1.0</real_time_factor>
+      <max_step_size>0.001</max_step_size>
+    </physics>
+
+    <!-- Scene ambient -->
+    <scene>
+      <ambient>0.4 0.4 0.4 1</ambient>
+      <background>0.7 0.75 0.8 1</background>
+    </scene>
+
+    <!-- ================================================================
+         WALLS — enclosed 6 m × 6 m room.
+         Inner clearance: X in [-3, 3], Y in [-3, 3].
+         Thickness 0.2 m, height 2.5 m.
+         ================================================================ -->
+
+    <model name="wall_east">
+      <static>true</static>
+      <pose>3.1 0 1.25 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>0.2 6.4 2.5</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.2 6.4 2.5</size></box></geometry>
+          <material>
+            <ambient>0.55 0.55 0.58 1</ambient>
+            <diffuse>0.65 0.65 0.7 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="wall_west">
+      <static>true</static>
+      <pose>-3.1 0 1.25 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>0.2 6.4 2.5</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.2 6.4 2.5</size></box></geometry>
+          <material>
+            <ambient>0.55 0.55 0.58 1</ambient>
+            <diffuse>0.65 0.65 0.7 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="wall_north">
+      <static>true</static>
+      <pose>0 3.1 1.25 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>6.4 0.2 2.5</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>6.4 0.2 2.5</size></box></geometry>
+          <material>
+            <ambient>0.5 0.52 0.55 1</ambient>
+            <diffuse>0.6 0.62 0.65 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="wall_south">
+      <static>true</static>
+      <pose>0 -3.1 1.25 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>6.4 0.2 2.5</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>6.4 0.2 2.5</size></box></geometry>
+          <material>
+            <ambient>0.5 0.52 0.55 1</ambient>
+            <diffuse>0.6 0.62 0.65 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- ================================================================
+         PERSON FIGURES — five instances of person_standing.
+         Yaw points each corner-person toward the room centre (0, 0)
+         so the figure is detectable from any approach angle.
+         ================================================================ -->
+
+    <!-- NE corner -->
+    <include>
+      <uri>model://person_standing</uri>
+      <name>person_corner_ne</name>
+      <pose>2.0 2.0 0 0 0 -2.3562</pose>
+    </include>
+
+    <!-- NW corner -->
+    <include>
+      <uri>model://person_standing</uri>
+      <name>person_corner_nw</name>
+      <pose>-2.0 2.0 0 0 0 -0.7854</pose>
+    </include>
+
+    <!-- SW corner -->
+    <include>
+      <uri>model://person_standing</uri>
+      <name>person_corner_sw</name>
+      <pose>-2.0 -2.0 0 0 0 0.7854</pose>
+    </include>
+
+    <!-- SE corner -->
+    <include>
+      <uri>model://person_standing</uri>
+      <name>person_corner_se</name>
+      <pose>2.0 -2.0 0 0 0 2.3562</pose>
+    </include>
+
+    <!-- Centre -->
+    <include>
+      <uri>model://person_standing</uri>
+      <name>person_centre</name>
+      <pose>0.0 0.0 0 0 0 0</pose>
+    </include>
+
+  </world>
+</sdf>

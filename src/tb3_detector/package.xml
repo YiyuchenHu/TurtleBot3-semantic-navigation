@@ -1,0 +1,37 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd"
+            schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>tb3_detector</name>
+  <version>0.1.0</version>
+  <description>
+    Stage-1 perception: run YOLO26 object detection on the TurtleBot3 camera image
+    and publish DetectionArray results for downstream localizer / semantic navigation.
+  </description>
+  <maintainer email="yiyuchenhu@gmail.com">Yiyuchen Hu</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>ament_python</buildtool_depend>
+
+  <!-- ROS msgs -->
+  <depend>rclpy</depend>
+  <depend>std_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>vision_msgs</depend>
+
+  <!-- Image bridge -->
+  <depend>cv_bridge</depend>
+
+  <!-- Python dependencies (installed via pip, listed here for documentation) -->
+  <!-- pip install ultralytics opencv-python-headless torch torchvision -->
+
+  <test_depend>ament_copyright</test_depend>
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_pep257</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

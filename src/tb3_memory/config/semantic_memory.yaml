@@ -1,0 +1,40 @@
+# ============================================================
+# tb3_memory — semantic_memory_node configuration
+# ============================================================
+# Stage-3 semantic memory: maintain stable object identities from
+# localized observations provided by tb3_localizer.
+#
+# See semantic_targets.yaml for the canonical name mapping
+# (semantic_name <-> detector_label <-> gazebo_model).
+
+semantic_memory_node:
+  ros__parameters:
+    # ── Matching ──────────────────────────────────────────
+    # Maximum Euclidean distance (metres) for a new observation to be
+    # matched to an existing object of the same label.
+    match_distance_threshold: 1.0
+
+    # EMA weight for position smoothing on matched objects.
+    # Higher = new observation dominates; lower = position is stickier.
+    position_smoothing_alpha: 0.3
+
+    # ── Aging ─────────────────────────────────────────────
+    # Seconds without observation before marking an object as stale.
+    stale_timeout: 5.0
+
+    # Seconds without observation before removing the object entirely.
+    remove_timeout: 30.0
+
+    # ── Publication ───────────────────────────────────────
+    # Rate (Hz) for periodic publication of the active object list.
+    publish_rate: 1.0
+
+    # ── Topics ────────────────────────────────────────────
+    input_topic:  "/localizer_node/localized_objects"
+    output_topic: "~/objects"    # -> /semantic_memory_node/objects
+
+    # ── Output ────────────────────────────────────────────
+    # Frame for published Detection3DArray.
+    # Use "base_link" for the current MVP (robot-relative).
+    # Future: transform to "map" via TF inside the node or downstream.
+    output_frame: "base_link"

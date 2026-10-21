@@ -1,0 +1,122 @@
+NOTICE — Third-party Gazebo models vendored in this repository
+==============================================================
+
+The directory src/tb3_bringup/models/ contains five vendored Gazebo models,
+from two different sources:
+
+  * Entries 1-3 were copied verbatim from a local Gazebo Classic model cache
+    (~/.gazebo/models). They were originally distributed through the Gazebo
+    model database (the online library historically fetched by Gazebo Classic
+    from models.gazebosim.org, maintained in the OSRF "gazebo_models"
+    repository, https://github.com/osrf/gazebo_models).
+  * Entries 4-5 were downloaded from Gazebo Fuel and DO carry published
+    license terms, transcribed in full below.
+
+They are vendored here so that the simulation works offline on a fresh
+machine, because the online model database is deprecated and slow/unreliable
+to fetch from.
+
+IMPORTANT — license status: NONE of the three cache-copied model directories
+(entries 1-3) contains a bundled LICENSE/COPYING file. For those three, the
+information below is a verbatim transcription of each model's model.config
+metadata (the only authorship/licensing-related information shipped inside
+the model directories). No compliance judgement has been made; licensing must
+be reviewed manually before public redistribution. (For reference only: the
+upstream osrf/gazebo_models repository declares its content to be
+Apache License 2.0 / CC-BY 4.0 at repository level, but the vendored copies
+themselves carry no license text.)
+
+----------------------------------------------------------------------
+1. person_standing  (src/tb3_bringup/models/person_standing)
+----------------------------------------------------------------------
+model.config metadata (verbatim):
+  name:        Standing person
+  version:     1.0
+  author:      Marina Kollmitz <kollmitz@cs.uni-freiburg.de>
+  description: A standing person. Model created with Makehuman
+               (http://www.makehuman.org/)
+Bundled license file: none found in model directory.
+
+----------------------------------------------------------------------
+2. ground_plane  (src/tb3_bringup/models/ground_plane)
+----------------------------------------------------------------------
+model.config metadata (verbatim):
+  name:        Ground Plane
+  version:     1.0
+  author:      Nate Koenig <nate@osrfoundation.org>
+  description: A simple ground plane.
+Bundled license file: none found in model directory.
+
+----------------------------------------------------------------------
+3. sun  (src/tb3_bringup/models/sun)
+----------------------------------------------------------------------
+model.config metadata (verbatim):
+  name:        Sun
+  version:     1.0
+  author:      Nate Koenig <nate@osrfoundation.org>
+  description: A directional light for the sun.
+Bundled license file: none found in model directory.
+
+----------------------------------------------------------------------
+4. VisitorChair  (src/tb3_bringup/models/VisitorChair)
+----------------------------------------------------------------------
+Source:   https://app.gazebosim.org/OpenRobotics/fuel/models/VisitorChair
+Download: https://fuel.gazebosim.org/1.0/OpenRobotics/models/VisitorChair.zip
+Obtained from Gazebo Fuel, owner OpenRobotics.
+
+License (verbatim as published on Gazebo Fuel):
+  Creative Commons Attribution 4.0 International
+  https://creativecommons.org/licenses/by/4.0/
+
+  "You are free to: Share - copy and redistribute the material in any
+  medium or format; Adapt - remix, transform, and build upon the material
+  for any purpose, even commercially. Under the following terms:
+  Attribution - You must give appropriate credit, provide a link to the
+  license, and indicate if changes were made."
+
+Attribution: VisitorChair by Wan Yi Seow (Open Robotics).
+Changes made: the thumbnails/ directory was removed to reduce repository
+size. The model geometry, materials and model.sdf are unmodified.
+
+model.config metadata (verbatim):
+  name:        VisitorChair
+  version:     1.0
+  author:      Wan Yi Seow <wanyi@openrobotics.org>
+  description: Blue chair for visitors
+
+----------------------------------------------------------------------
+5. first_2015_trash_can  (src/tb3_bringup/models/first_2015_trash_can)
+----------------------------------------------------------------------
+Source:   https://app.gazebosim.org/OpenRobotics/fuel/models/FIRST%202015%20trash%20can
+Download: https://fuel.gazebosim.org/1.0/OpenRobotics/models/FIRST%202015%20trash%20can.zip
+Obtained from Gazebo Fuel, owner OpenRobotics.
+
+License (verbatim as published on Gazebo Fuel):
+  Creative Commons Zero v1.0 Universal (CC0 1.0 Public Domain Dedication)
+  https://creativecommons.org/publicdomain/zero/1.0/
+
+  "The person who associated a work with this deed has dedicated the work
+  to the public domain by waiving all of his or her rights to the work
+  worldwide under copyright law, including all related and neighboring
+  rights, to the extent allowed by law. You can copy, modify, distribute
+  and perform the work, even for commercial purposes, all without asking
+  permission."
+
+Attribution: not required under CC0; credited here as a courtesy —
+FIRST 2015 trash can by Nate Koenig (Open Robotics).
+Changes made: the thumbnails/ directory was removed to reduce repository
+size. The model geometry, materials and model.sdf are unmodified.
+
+model.config metadata (verbatim):
+  name:        FIRST 2015 trash can
+  version:     1.0
+  author:      Nate Koenig <nate@osrfoundation.org>
+  description: A trash can.
+
+----------------------------------------------------------------------
+Everything else in this repository (all ROS 2 packages, launch files,
+worlds, configuration, and documentation) is original work
+covered by the repository LICENSE file (MIT), except the fine-tuned detector
+weights src/tb3_detector/models/tb3det_yolo26n.pt: they are derived from the
+Ultralytics YOLO26n pretrained weights and are therefore subject to the
+AGPL-3.0 licence (https://github.com/ultralytics/ultralytics/blob/main/LICENSE).

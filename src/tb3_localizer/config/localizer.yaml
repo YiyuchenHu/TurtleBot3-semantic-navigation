@@ -1,0 +1,58 @@
+# ============================================================
+# tb3_localizer — localizer_node configuration
+# ============================================================
+# Stage-2 planar localizer: fuse 2D detections + LiDAR → (x,y) in base_link.
+#
+# See semantic_targets.yaml for the canonical name mapping
+# (semantic_name ↔ detector_label ↔ gazebo_model).
+
+localizer_node:
+  ros__parameters:
+    # ── Camera ────────────────────────────────────────────
+    # Horizontal field of view (degrees).  Default Gazebo TurtleBot3 camera
+    # uses a <horizontal_fov> of 1.085595 rad ≈ 62.2°.
+    # Verify: ros2 topic echo /camera/camera_info --once | grep width
+    camera_hfov_deg: 62.2
+
+    # ── LiDAR fusion ──────────────────────────────────────
+    # Number of scan rays on EACH SIDE of the central bearing ray.
+    # Total window = 2 * scan_window_half + 1 rays.
+    # Larger = more robust to noise, but blurs separate nearby objects.
+    # Back to 5 (was 10). The widening existed for the bench, whose bbox spanned
+    # ~32 deg; that target is retired. All three current targets are narrow, and
+    # a +/-10 deg window spans 0.67 m at 1.9 m -- wider than the person, so most
+    # rays in it flew past and the median came back as the wall 0.9 m behind her,
+    # which stopped the person landmark from ever forming.
+    scan_window_half: 5
+
+    # Valid range bounds (metres). Reject inf/nan and returns outside this band.
+    min_valid_range: 1.0             # was 0.12; below ~1 m the object fills
+                                     # the frame and yolo26n misclassifies it,
+                                     # planting a landmark on the wrong object
+    max_valid_range: 3.3             # was 5.0; the LDS-01 saturates at 3.5 m
+                                     # and a saturated return is the wall
+                                     # behind the object, not the object
+
+    # ── Frame-edge boxes ──────────────────────────────────
+    # Drop detections whose bbox centre is within this many pixels of the
+    # left or right image edge (640 px wide: u < 40 or u > 600). A box
+    # clipped by the frame has its centre pulled inward, so its bearing
+    # points beside the object and the LiDAR window returns whatever stands
+    # there. Measured 2026-09-03 over 12 runs: 10-13% of all boxes per class
+    # sat at the edge, and those were the source of the trash_can points on
+    # the person that grew cross-class candidates to n=8-10. The node logs
+    # "[edge_drop] dropped/seen per class" every edge_drop_summary_sec.
+    edge_margin_px: 40
+    edge_drop_summary_sec: 30.0
+
+    # ── Topics ────────────────────────────────────────────
+    detections_topic: "/detector_node/detections"
+    scan_topic:       "/scan"
+    image_topic:      "/camera/image_raw"
+    output_topic:     "~/object_points"    # → /localizer_node/object_points
+
+    # ── Output ────────────────────────────────────────────
+    # Frame for published PointStamped messages.
+    # Use "base_link" for Stage-2 MVP (robot-relative).
+    # Future: transform to "map" via TF inside the node or downstream.
+    output_frame: "base_link"

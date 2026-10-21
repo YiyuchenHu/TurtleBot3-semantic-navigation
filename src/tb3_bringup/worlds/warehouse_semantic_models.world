@@ -1,0 +1,178 @@
+<?xml version="1.0" ?>
+<!--
+  warehouse_semantic_models.world — Gazebo Classic warehouse with real semantic models.
+
+  Room geometry: 4 m x 6 m interior,
+  but replaces placeholder cylinders with actual Gazebo mesh models for
+  YOLO-based semantic detection testing.
+
+  Interior (open floor): approximately 4 m (X) x 6 m (Y), centered at origin.
+  Inner faces: x = +/-2, y = +/-3.
+
+  Coordinate layout (top view, +X right, +Y up):
+    Y = +3  ______ north wall ______
+            |                       |
+    X=-2    |   open interior       |    X=+2
+            |                       |
+    Y = -3  ______ south wall ______
+
+  Semantic Target Set (matches config/semantic_targets.yaml):
+
+    semantic_name   detector_label   gazebo_model           Position
+    trash_can       trash_can        first_2015_trash_can   ( 0.7,  1.5)
+    chair           chair            VisitorChair           (-1.3,  2.4)
+    person          person           person_standing        ( 0.6, -2.2)
+
+  Robot spawn: recommended (0, 0) or (-1.2, -1.2) facing +X.
+-->
+<sdf version="1.6">
+  <world name="warehouse_semantic_models">
+
+    <!-- Standard lighting -->
+    <include>
+      <uri>model://sun</uri>
+    </include>
+
+    <!-- Infinite ground plane -->
+    <include>
+      <uri>model://ground_plane</uri>
+    </include>
+
+    <!-- Physics: stable real-time factor -->
+    <physics type="ode">
+      <real_time_factor>1.0</real_time_factor>
+      <max_step_size>0.001</max_step_size>
+    </physics>
+
+    <!-- Scene ambient -->
+    <scene>
+      <ambient>0.4 0.4 0.4 1</ambient>
+      <background>0.7 0.75 0.8 1</background>
+    </scene>
+
+    <!-- ================================================================
+         WALLS
+         Inner clearance: X in [-2, 2], Y in [-3, 3] (4 m x 6 m).
+         Thickness 0.2 m, height 2.5 m.
+         ================================================================ -->
+
+    <model name="wall_east">
+      <static>true</static>
+      <pose>2.1 0 1.25 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>0.2 6.4 2.5</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.2 6.4 2.5</size></box></geometry>
+          <material>
+            <ambient>0.55 0.55 0.58 1</ambient>
+            <diffuse>0.65 0.65 0.7 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="wall_west">
+      <static>true</static>
+      <pose>-2.1 0 1.25 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>0.2 6.4 2.5</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.2 6.4 2.5</size></box></geometry>
+          <material>
+            <ambient>0.55 0.55 0.58 1</ambient>
+            <diffuse>0.65 0.65 0.7 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="wall_north">
+      <static>true</static>
+      <pose>0 3.1 1.25 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>4.4 0.2 2.5</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>4.4 0.2 2.5</size></box></geometry>
+          <material>
+            <ambient>0.5 0.52 0.55 1</ambient>
+            <diffuse>0.6 0.62 0.65 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="wall_south">
+      <static>true</static>
+      <pose>0 -3.1 1.25 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>4.4 0.2 2.5</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>4.4 0.2 2.5</size></box></geometry>
+          <material>
+            <ambient>0.5 0.52 0.55 1</ambient>
+            <diffuse>0.6 0.62 0.65 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- ================================================================
+         SEMANTIC OBJECTS — vendored in src/tb3_bringup/models
+         (see NOTICE for sources and licenses). Object choice and placement
+         distances come from the F1 ablation: every target here is both
+         detectable by yolo26n AND solid to the LDS-01 from 0 to 0.3 m, which
+         table_marble and stop_sign were not.
+         ================================================================ -->
+
+    <!-- Semantic target: trash_can
+         semantic_name:   trash_can
+         detector_label:  trash_can   (its own class in the fine-tuned weights; the
+                          COCO weights reported it as "traffic light" — see semantic_targets.yaml)
+         gazebo_model:    first_2015_trash_can
+         Position: (0.7, 1.5) — northeast quadrant, where table_marble used to be.
+         F1 ablation: yolo26n p50 0.45 at 1.5 m head-on, 0.42 at 2.0 m;
+         LiDAR beam_hit 1.00 at every pose, range error a constant -0.22 m
+         (= the can's radius), jitter 0.02 m. -->
+    <include>
+      <uri>model://first_2015_trash_can</uri>
+      <name>semantic_trash_can</name>
+      <pose>0.7 1.5 0 0 0 0</pose>
+    </include>
+
+    <!-- Semantic target: chair
+         semantic_name:   chair
+         detector_label:  chair
+         gazebo_model:    VisitorChair
+         Position: (-1.3, 2.4) — northwest quadrant. Kept 2.19 m from the trash
+         can so the two never fall inside semantic_map_memory's 1.5 m merge
+         radius. F1 ablation: yolo26n reports COCO class 'chair' at
+         p50 0.52, best viewpoint 3.0 m / 45 deg;
+         LiDAR beam_hit 1.00 with no missing returns at any pose. -->
+    <include>
+      <uri>model://VisitorChair</uri>
+      <name>semantic_chair</name>
+      <pose>-1.3 2.4 0 0 0 -0.9</pose>
+    </include>
+
+    <!-- Semantic target: person
+         semantic_name:   person
+         detector_label:  person
+         gazebo_model:    person_standing
+         Position: (0.6, -2.2) — southeast quadrant, well clear of the other two targets
+         Yaw: pi — person faces -X (toward room center) for camera visibility. -->
+    <include>
+      <uri>model://person_standing</uri>
+      <name>semantic_person</name>
+      <pose>0.6 -2.2 0 0 0 3.14159</pose>
+    </include>
+
+  </world>
+</sdf>

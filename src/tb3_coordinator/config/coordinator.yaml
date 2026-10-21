@@ -1,0 +1,168 @@
+# ============================================================
+# tb3_coordinator — coordinator_node + semantic_map_memory_node
+# ============================================================
+
+coordinator_node:
+  ros__parameters:
+    user_command_topic:       "/user_command"
+    exploration_enabled_topic: "/exploration_enabled"
+    query_command_topic:      "/semantic_query_node/command"
+    query_result_topic:       "/semantic_query_node/selected_target"
+    goal_pose_topic:          "/nav_goal_adapter_node/goal_pose"
+    status_topic:             "~/status"
+    navigate_to_pose_action:  "navigate_to_pose"
+    nav_goal_timeout_sec:     60.0
+    auto_resume_exploration:  true
+    resume_delay_sec:         3.0
+
+    # ── Perception sweep (disabled by default) ─────────────────
+    # The 360° in-place sweep was originally meant to "kick-start" SLAM by
+    # exposing the surrounding semantics, but in practice spinning in place
+    # provides almost no SLAM benefit (the laser only sees what is already in
+    # line of sight from the current pose) while costing ~18 s and stressing
+    # the TF cache (we observed `Message Filter dropping message` during sweeps).
+    #
+    # The replacement bootstrap strategy now lives in goal_assignment_node:
+    # when exploration is enabled but no valid frontier exists, that node
+    # picks a low-cost point in the global costmap around the robot and
+    # sends it to Nav2. This actually moves the robot, which actually
+    # grows the map.
+    #
+    # Flip this back to `true` to restore the legacy spin behavior.
+    enable_perception_sweep:  false
+
+semantic_map_memory_node:
+  ros__parameters:
+    input_topic:              "/semantic_memory_node/objects"
+    output_topic:             "/semantic_memory_markers"
+    map_topic:                "/map"
+    target_frame:             "map"
+    tf_timeout:               0.3
+    publish_rate:             1.0
+
+    # ── Landmark matching ──────────────────────────────────
+    # Tolerance for "this observation belongs to an existing landmark".
+    # Bumped 0.8 → 1.5 m because in practice a single physical person is
+    # observed from many viewpoints and the projected (x, y) wanders by
+    # 0.3–0.5 m due to:
+    #   * YOLO bbox center ≠ the LiDAR centroid of the person's legs
+    #     (bbox includes arms / clothing → ±0.15 m offset).
+    #   * LDS-01 returns at ankle height bounce off either leg
+    #     depending on angle → ±0.1 m range jitter.
+    #   * SLAM map→odom drift in feature-poor middle of the warehouse
+    #     (LDS-01 range 3.5 m vs 6×10 m room) adds another ±0.3 m.
+    #   * Bot impacts on a `<static>` person model can't move the
+    #     person but momentarily pitch the chassis — pitched LDS rays
+    #     hit the floor, which SLAM rasterizes as fake obstacles, so
+    #     subsequent "snap to nearest island" can pull the projection
+    #     onto a phantom obstacle a meter away from the real person.
+    # 1.5 m is well below the inter-person spacing in the
+    # `warehouse_models_person` world (corner ↔ centre = 4.47 m), so
+    # legitimately separate persons will not be merged.
+    merge_distance:           1.5
+    candidate_merge_distance: 1.5
+
+    # ── Promotion ──────────────────────────────────────────
+    # Generic fallback for any class without a class-specific override
+    # below. All three enabled targets DO have overrides (person 8,
+    # chair 12, trash_can 12), so nothing currently reaches this value;
+    # it only matters if you add a fourth target to semantic_targets.yaml.
+    min_observations:         3
+
+    # ── Obstacle island search ─────────────────────────────
+    # Search window radius in grid cells around the observation.
+    search_radius_cells:      20
+
+    # Minimum occupancy value (0-100) to consider a cell as obstacle.
+    occupied_threshold:       50
+
+    # Minimum connected pixels for a valid island (1 = accept single pixels).
+    min_island_pixels:        2
+
+    # ── Candidate lifecycle ────────────────────────────────
+    # Seconds before an unconfirmed candidate is discarded.
+    candidate_timeout:        45.0
+
+    # ── Observation quality ───────────────────────────
+    # Reject observations farther than this from robot (in base_link).
+    # Reduces landmark drift from noisy far-distance localizer output.
+    max_observation_range_m:   2.5
+
+    # ── Class-aware gating ────────────────────────────
+    # person was 2.5 m while the other two were 3.2 m. Measured over 12
+    # instrumented runs (reports 2026-09-03): that gate rejected 43% of all
+    # person observations (34% of localizer frames fall in 2.5-3.3 m) and
+    # only 24% of them reached the candidate counter, which is why the
+    # person was the last landmark in every slow run (315-405 s). Far
+    # points whose LiDAR window hit the wall behind the person land
+    # outside the grid or in free space and are dropped by the
+    # out_of_grid / no_island gates anyway. Aligned to 3.2 m.
+    person_max_range_m:        3.2
+    chair_max_range_m:         3.2
+    trash_can_max_range_m:     3.2
+    # Promotion threshold for `person` candidates. Bumped 3 → 8 to
+    # filter out ghost landmarks created by transient mis-projections
+    # near a real person (typical symptom: a `person_N` with n=4 or
+    # n=5 sitting 0.5–1 m next to a high-confidence `person_M` with
+    # n=50+). Real persons in `warehouse_models_person` accumulate
+    # n ≥ 19 once the bot finishes exploring, so 8 is well below the
+    # natural support of every legitimate landmark.
+    person_min_observations:   8
+    # chair and trash can get 12, not 3. Measured 2026-08-27 with the COCO
+    # weights: when either object sat at the edge of the frame, partially
+    # clipped, yolo26n swapped the two labels, which planted a `chair` landmark
+    # on the trash can and a trash-can landmark on the chair. Those mistakes
+    # stalled at ~3 observations while the genuine landmarks reach n = 50-100,
+    # so 12 separated them cleanly and is still far below the real support.
+    # The fine-tuned tb3det_yolo26n weights confirm landmarks much faster and
+    # have not produced a swap; the thresholds are deliberately left at 12
+    # until a separate tuning round lowers them (see NOTES.md).
+    chair_min_observations:    12
+    trash_can_min_observations: 12
+    wall_boundary_margin_m:   0.20
+
+    # ── Landmark relabelling ───────────────────────────────
+    # A landmark used to be stuck with whatever label promoted it. The
+    # cross-class mutex then discarded every disagreeing observation that
+    # landed on it, so a landmark promoted under the wrong label actively
+    # suppressed the evidence that would have corrected it: measured
+    # 2026-09-05, a `trash_can_1` sitting on the chair rejected 86 `chair`
+    # observations and `go to chair` could not succeed until the run was
+    # restarted.
+    #
+    # Now every landmark keeps a per-label observation count, disagreeing
+    # observations inside the merge radius are counted instead of dropped,
+    # and the label switches when a challenger is clearly ahead. Position is
+    # still averaged over observations of the current label only.
+    relabel_enabled:           true
+    # How far ahead the challenger has to be: challenger >= ratio x current,
+    # AND the challenger must also have reached its own min_observations
+    # (12 for chair / trash_can, 8 for person) so a few strays cannot rename
+    # anything. 1.5 is the hysteresis band. Because the losing label keeps
+    # its count, flipping back needs 1.5x the NEW count, so a correction
+    # settles instead of oscillating. Equal counts never relabel.
+    relabel_ratio:             1.5
+    # How close a disagreeing observation has to be to count as evidence.
+    # Kept at the cross-class mutex distance ON PURPOSE, not at
+    # merge_distance: this is exactly the set of observations the old code
+    # already discarded, so counting them costs the candidate layer nothing.
+    # Measured at 1.5 m over 8 acceptance runs it starved candidates instead
+    # - one run absorbed 53 chair observations while the chair candidate saw
+    # 2, and the chair was never promoted. Raise it only together with a
+    # fresh acceptance batch.
+    relabel_evidence_distance_m: 0.6
+
+    # ── Gate statistics (observability only) ──────────────
+    # Every rejection gate in the observation pipeline (range, TF, grid
+    # bounds, no occupancy island, geometry, mutex) and every success path
+    # (landmark merge, candidate merge, new candidate, promotion) is counted
+    # per class. One `[gate_summary]` block is logged every this many
+    # seconds when a counter changed, plus a final block at shutdown, so a
+    # log can say which gate held a target back and by how much. The
+    # counters are never consulted by the promotion logic. 0 disables the
+    # periodic block (the final one is still printed).
+    gate_summary_interval_sec: 10.0
+
+    # ── Visualization ──────────────────────────────────────
+    sphere_radius:            0.18
+    text_offset_z:            0.45

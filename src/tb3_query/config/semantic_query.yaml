@@ -1,0 +1,26 @@
+# ============================================================
+# tb3_query — semantic_query_node configuration
+# ============================================================
+# Stage-4 semantic query: resolve text commands against semantic
+# memory to select a navigation target.
+#
+# See semantic_targets.yaml for the canonical name mapping
+# (semantic_name <-> detector_label <-> gazebo_model).
+
+semantic_query_node:
+  ros__parameters:
+    # ── Topics ────────────────────────────────────────────
+    memory_topic:  "/semantic_map_memory_node/landmark_objects"  # persistent landmarks in map frame
+    command_topic: "~/command"        # -> /semantic_query_node/command
+    output_topic:  "~/selected_target"  # -> /semantic_query_node/selected_target
+    status_topic:  "~/query_status"     # -> /semantic_query_node/query_status
+
+    # ── Mapping ───────────────────────────────────────────
+    # Path to semantic_targets.yaml. Empty = auto-resolve from the
+    # tb3_bringup package share (share/tb3_bringup/config/).
+    # backend.launch.py overrides this with that resolved path, so the
+    # fallback only fires when the node is started bare with `ros2 run`.
+    semantic_targets_file: ""
+
+    # ── Output ────────────────────────────────────────────
+    output_frame: "map"  # persistent landmarks are in map frame

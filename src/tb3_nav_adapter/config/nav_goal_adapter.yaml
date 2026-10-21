@@ -1,0 +1,27 @@
+# ============================================================
+# tb3_nav_adapter — nav_goal_adapter_node configuration
+# ============================================================
+# Stage-5: convert a selected semantic target into a safe
+# approach PoseStamped goal for Nav2.
+
+nav_goal_adapter_node:
+  ros__parameters:
+    # ── Approach geometry ─────────────────────────────────
+    # How far from the target the robot should stop (metres).
+    approach_distance: 0.5
+
+    # Reject targets closer than this to avoid collisions (metres).
+    min_standoff_distance: 0.3
+
+    # ── Topics ────────────────────────────────────────────
+    input_topic:  "/semantic_query_node/selected_target"
+    output_topic: "~/goal_pose"    # -> /nav_goal_adapter_node/goal_pose
+
+    # ── Frame ─────────────────────────────────────────────
+    # Desired output frame. The node will TF-transform the approach
+    # pose from the source frame (typically base_link) into this frame.
+    # If the transform is unavailable, it falls back to the source frame.
+    target_frame: "map"
+
+    # TF lookup timeout in seconds.
+    tf_timeout: 0.5

@@ -1,0 +1,47 @@
+# Course container for macOS / Windows hosts. Run every command from this
+# directory (docker/), or add `-f docker/docker-compose.yml` from the repo root.
+#
+#   docker compose build          # once; ~10-20 min, ~3 GB of downloads
+#   docker compose up -d          # start the container + virtual desktop
+#   open http://localhost:6080/   # Gazebo / RViz windows appear here
+#   docker compose exec tb3 bash  # one of these per README terminal (T1-T6)
+#   docker compose down           # stop; the checkout and its build/ stay
+#
+# Host-side docs: docs/setup-macos.md, docs/setup-windows.md.
+
+name: tb3-course
+
+services:
+  tb3:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: tb3-course:humble
+    container_name: tb3-course
+
+    # amd64 only: Gazebo Classic 11 has no arm64 packages for Ubuntu 22.04
+    # (see Dockerfile). Apple Silicon runs this through Rosetta — enable
+    # "Use Rosetta for x86_64/amd64 emulation" in Docker Desktop settings.
+    platform: linux/amd64
+
+    # Your checkout, live, at the path every README command assumes
+    # (~ is /root inside the container). colcon writes build/, install/
+    # and log/ into it; all three are git-ignored.
+    volumes:
+      - ..:/root/TurtleBot3-semantic-navigation
+    working_dir: /root/TurtleBot3-semantic-navigation
+
+    # The browser desktop. Bound to the loopback interface on purpose: the
+    # VNC session has no password, so it must not be reachable from the LAN.
+    ports:
+      - "127.0.0.1:6080:6080"
+
+    environment:
+      VNC_GEOMETRY: ${VNC_GEOMETRY:-1600x900}   # initial desktop size
+
+    # Fast DDS moves camera images between nodes through /dev/shm; Docker's
+    # 64 MB default is too small once ~20 nodes and image topics are alive.
+    shm_size: "2gb"
+
+    # A real PID 1 that reaps the processes Gazebo / launch files leave behind.
+    init: true

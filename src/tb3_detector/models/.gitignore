@@ -1,0 +1,10 @@
+# Ignore model weight binaries (large files — download locally)
+*.pt
+*.pth
+*.onnx
+*.engine
+*.trt
+
+# The fine-tuned course detector ships with the repo (5.4 MB); only the COCO
+# yolo26n.pt stays a local download.
+!tb3det_yolo26n.pt

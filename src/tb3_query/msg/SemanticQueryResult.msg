@@ -1,0 +1,10 @@
+std_msgs/Header header
+bool success
+string query_text
+string semantic_name
+string detector_label
+string object_id
+geometry_msgs/Point position
+string frame_id
+float32 confidence
+string status_message

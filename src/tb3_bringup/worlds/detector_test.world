@@ -1,0 +1,156 @@
+<?xml version="1.0" ?>
+<!--
+  detector_test.world — Minimal Gazebo Classic world for Stage-1/2 perception testing.
+  Purpose: YOLO26 detector + LiDAR-camera localizer validation.
+           No SLAM, no Nav2, no warehouse walls.
+
+  ═══ Validated Semantic Target Set ═══════════════════════════════════════════
+  One instance of each of the three enabled targets in
+  config/semantic_targets.yaml. Nothing else is in the scene.
+
+    semantic_name    detector_label    gazebo_model          Placement
+    ─────────────    ──────────────    ────────────          ─────────
+    person           person            person_standing       2.0 m @   0°
+    trash_can        trash_can         first_2015_trash_can   2.2 m @ -45°
+    chair            chair             VisitorChair           3.0 m @ +45°
+  ═════════════════════════════════════════════════════════════════════════════
+
+  ─── Layout (top view, +X ahead of the robot, +Y left) ────────────────────
+
+                            +Y (left)
+                              │        [VisitorChair]
+                              │          (2.12, 2.12)   3.0 m @ +45°
+                              │        ╱
+                              │      ╱
+  Robot ──────────────────────┼────[person_standing]────→ +X
+  (0, 0)                      │      ╲   (2.0, 0.0)      2.0 m @ 0°
+                              │        ╲
+                              │        [first_2015_trash_can]
+                              │          (1.56, -1.56)  2.2 m @ -45°
+
+  ──────────────────────────────────────────────────────────────────────────
+
+  WHY THESE DISTANCES — each target sits inside its own measured band, and
+  inside the localizer's LiDAR gate (localizer.yaml min_valid_range 1.0,
+  max_valid_range 3.3):
+
+    person     2.0 m  yolo26n p50 ~0.9 at 2.0 m side-on; the strongest of the
+                      three. coordinator.yaml gates it at person_max_range_m
+                      2.5, so it must sit below that.
+    trash_can  2.2 m  F1 ablation: p50 0.45 at 1.5 m head-on, 0.42 at 2.0 m,
+                      0.31–0.65 at 2.5 m. LiDAR beam_hit 1.00 at every pose
+                      with a constant −0.22 m offset (the can's radius).
+    chair      3.0 m  The chair FALLS BELOW the 0.35 bar when viewed head-on
+                      at 1.5–2.0 m, so it is placed far. Its yaw matters more
+                      than its distance and was measured here — see OBJECT 3.
+                      coordinator.yaml gates it at 3.2 m.
+
+  WHY ±45° AND NOT ALL IN ONE FRAME — the camera's horizontal FOV is 62.2°
+  (localizer.yaml camera_hfov_deg), i.e. ±31.1°. Each target is therefore
+  centred by rotating the robot to its bearing, and only one is in frame at a
+  time. That is deliberate:
+
+    * chair and trash_can are 90° apart, so they can NEVER appear in the same
+      frame. yolo26n swaps those two labels when either one is clipped at the
+      frame edge (the reason coordinator.yaml raises both promotion
+      thresholds to 12), and this world removes that confound entirely.
+    * the three objects are 1.62 m / 2.12 m / 3.72 m apart pairwise, all above
+      semantic_map_memory's 1.5 m merge radius, so two targets can never be
+      merged into one landmark.
+
+  Rotate with teleop to bring each target to the centre of the frame:
+      ros2 run turtlebot3_teleop teleop_keyboard
+-->
+<sdf version="1.6">
+  <world name="detector_test">
+
+    <!-- Directional sunlight — essential for texture-based YOLO detection -->
+    <include>
+      <uri>model://sun</uri>
+    </include>
+
+    <!-- Flat infinite ground plane -->
+    <include>
+      <uri>model://ground_plane</uri>
+    </include>
+
+    <!-- Physics: real-time stable -->
+    <physics type="ode">
+      <real_time_factor>1.0</real_time_factor>
+      <max_step_size>0.001</max_step_size>
+    </physics>
+
+    <!-- Bright scene for camera-based detection -->
+    <scene>
+      <ambient>0.6 0.6 0.6 1</ambient>
+      <background>0.8 0.85 0.9 1</background>
+      <shadows>false</shadows>
+    </scene>
+
+    <!-- ═══════════════════════════════════════════════════════════════
+         OBJECT 1 — Person
+         semantic_name:    "person"
+         detector_label:   "person"
+         gazebo_model_name: person_standing
+
+         Pose: (2.0, 0, 0) — dead ahead, 2.0 m from the robot
+         Yaw: π — person faces the robot for maximum silhouette area
+         ═══════════════════════════════════════════════════════════════ -->
+    <include>
+      <uri>model://person_standing</uri>
+      <name>test_person</name>
+      <pose>2.0 0 0 0 0 3.14159</pose>
+    </include>
+
+    <!-- ═══════════════════════════════════════════════════════════════
+         OBJECT 2 — Trash can
+         semantic_name:    "trash_can"
+         detector_label:   "trash_can"   ("traffic light" with the COCO weights, which
+                                          have no trash-can class)
+         gazebo_model_name: first_2015_trash_can
+
+         Pose: (1.556, -1.556, 0) — 2.2 m at −45°, to the robot's right.
+         Rotationally symmetric, so yaw is irrelevant.
+         ═══════════════════════════════════════════════════════════════ -->
+    <include>
+      <uri>model://first_2015_trash_can</uri>
+      <name>test_trash_can</name>
+      <pose>1.556 -1.556 0 0 0 0</pose>
+    </include>
+
+    <!-- ═══════════════════════════════════════════════════════════════
+         OBJECT 3 — Chair
+         semantic_name:    "chair"
+         detector_label:   "chair"
+         gazebo_model_name: VisitorChair
+
+         Pose: (2.121, 2.121, 0) — 3.0 m at +45°, to the robot's left.
+         Yaw +1.571 rad (+90°). Measured in this world, robot facing the
+         chair, 200-frame samples per orientation:
+
+             chair yaw   detected as "chair"   detected as "traffic light" (COCO weights, 2026-08)
+             ─────────   ───────────────────   ───────────────────────────
+              +1.571      227 @ conf 0.79       0            ← chosen
+              −1.571      174 @ conf 0.63       0
+              +3.142      179 @ conf 0.59       0
+               0.000      182 @ conf 0.53       0
+              +0.785      219 @ conf 0.48       0
+              −0.785        0                 199 @ conf 0.64
+              +2.356        0                   0
+              −2.356        0                   0
+
+         Two aspects are traps, which is why this yaw is pinned: at −0.785
+         the chair is read as a TRAFFIC LIGHT on essentially every frame —
+         the same label the trash can uses, which would make this world
+         teach the exact confusion it is meant to avoid — and at ±2.356 it
+         is not detected at all. +1.571 is both the most confident and the
+         most stable.
+         ═══════════════════════════════════════════════════════════════ -->
+    <include>
+      <uri>model://VisitorChair</uri>
+      <name>test_chair</name>
+      <pose>2.121 2.121 0 0 0 1.571</pose>
+    </include>
+
+  </world>
+</sdf>

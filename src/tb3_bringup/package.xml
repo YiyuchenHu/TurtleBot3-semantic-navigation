@@ -1,0 +1,40 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd"
+            schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>tb3_bringup</name>
+  <version>0.1.0</version>
+  <description>
+    Bringup for the TurtleBot3 semantic navigation course: every launch file,
+    the RViz config, the Gazebo worlds and the vendored Gazebo models live
+    here. Nothing in this package runs code of its own — it only starts nodes
+    that live in the tb3_* packages and points them at the right assets.
+
+    Start here when you are looking for "which file do I edit": launch/README.md
+    maps each launch file to its terminal and to the config it reads.
+  </description>
+  <maintainer email="yiyuchenhu@gmail.com">Yiyuchen Hu</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <!-- Course packages whose nodes these launch files start. -->
+  <exec_depend>tb3_coordinator</exec_depend>
+  <exec_depend>tb3_detector</exec_depend>
+  <exec_depend>tb3_frontier_exploration</exec_depend>
+  <exec_depend>tb3_localizer</exec_depend>
+  <exec_depend>tb3_memory</exec_depend>
+  <exec_depend>tb3_nav_adapter</exec_depend>
+  <exec_depend>tb3_query</exec_depend>
+
+  <!-- Third-party stacks the launch files include. -->
+  <exec_depend>gazebo_ros</exec_depend>
+  <exec_depend>turtlebot3_gazebo</exec_depend>
+  <exec_depend>nav2_bringup</exec_depend>
+  <exec_depend>slam_toolbox</exec_depend>
+  <exec_depend>rviz2</exec_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

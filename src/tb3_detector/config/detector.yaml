@@ -1,0 +1,64 @@
+# ============================================================
+# tb3_detector  —  detector_node configuration
+# ============================================================
+# All values here are overridable via launch arguments or
+# ros2 run ... --ros-args -p key:=value.
+
+detector_node:
+  ros__parameters:
+    # ── Model ──────────────────────────────────────────────
+    # tb3det_yolo26n.pt ships with the repository (5.4 MB, exempted from the
+    # *.pt ignore rule in models/.gitignore): yolo26n fine-tuned on 9600
+    # Gazebo frames of the three course targets (NOTES.md, "How the detector
+    # was trained"). Relative paths are resolved from <pkg_share>/models/.
+    # The COCO yolo26n.pt it replaced is still a local download and can be
+    # swapped back in here for the comparison experiment in NOTES.md; if you
+    # do, class_filter below must become ["person", "traffic light", "chair"].
+    # CPU cost is identical (same architecture): 31.8 vs 32.4 ms median per
+    # 640x480 frame on an i7-12700H, measured with scripts/bench_detector_cpu.py.
+    model_path: "tb3det_yolo26n.pt"   # <- filename inside models/ folder
+
+    # ── Inference ──────────────────────────────────────────
+    # 0.40 for the fine-tuned weights, from a threshold sweep on the 800-frame
+    # v2 test split (tb3-detector-finetune/src/eval_finetuned.py, IoU 0.5):
+    #   conf   precision  recall  false positives / frame
+    #   0.30   0.974      0.988   0.051
+    #   0.40   0.981      0.985   0.037
+    #   0.50   0.988      0.979   0.024
+    # True targets score >= 0.9 almost everywhere, so anything in 0.35-0.50
+    # costs under 1% recall; 0.40 is the point where the last of the phantom
+    # boxes on props go without touching recall on heavily occluded targets
+    # (45/60 of targets with under half their pixels visible are still found).
+    # (With the COCO weights this was 0.35: the real trash can only scored
+    # 0.31-0.65 there, and 0.30 was already low enough for a phantom
+    # "traffic light" 0.36 m from the robot to plant a false landmark.)
+    conf_threshold: 0.40
+    device: "cpu"                     # "cpu" | "cuda:0"
+    enable_tracking: false            # true = ByteTrack; track_id populated
+
+    # ── Class filter ───────────────────────────────────────
+    # List detector_label values from semantic_targets.yaml (validated in sim).
+    # IMPORTANT: use detector_label strings, NOT semantic_name or gazebo_model names.
+    # IMPORTANT: do NOT use bare [] — rclpy Humble cannot infer type from an empty
+    #            YAML list and will crash. Use [""] to accept ALL classes.
+    #
+    #   semantic   →  detector_label  (see config/semantic_targets.yaml)
+    #   person     →  "person"
+    #   trash_can  →  "trash_can"
+    #   chair      →  "chair"
+    #
+    # The fine-tuned weights only know these three classes, so the filter is
+    # now a no-op safety net. It mattered with the COCO weights, which fired
+    # "airplane" on most untextured Gazebo props (p50 up to 0.51 on a cafe
+    # table, 0.34 on a person) and called the trash can "traffic light".
+    class_filter: ["person", "trash_can", "chair"]
+
+    # ── Topics ─────────────────────────────────────────────
+    image_topic:        "/camera/image_raw"
+    camera_info_topic:  "/camera/camera_info"
+    detections_topic:   "~/detections"     # resolves to /detector_node/detections
+    debug_image_topic:  "~/debug_image"    # resolves to /detector_node/debug_image
+
+    # ── Debug ──────────────────────────────────────────────
+    publish_debug_image: true
+    queue_size: 5

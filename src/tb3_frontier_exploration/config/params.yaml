@@ -1,0 +1,171 @@
+# tb3_frontier_exploration — practical parameters
+# Used by frontier_detection_node and goal_assignment_node.
+# Override via launch args or config overlay as needed.
+
+frontier_detection_node:
+  ros__parameters:
+    # Topic to subscribe to for the occupancy grid (e.g. from SLAM or map_server).
+    map_topic: "/map"
+
+    # Topic for the global costmap; used to sample cost at frontier centroids and filter unsafe goals.
+    costmap_topic: "/global_costmap/costmap"
+
+    # Frontiers are published on every map update (callback-driven). No separate rate param in current implementation.
+    frontiers_topic: "/frontiers"
+    frontiers_markers_topic: "/frontiers_markers"
+
+    # Frame for published poses and markers (e.g. "map" with Nav2/SLAM).
+    frame_id: "map"
+
+    # Minimum number of adjacent frontier cells to form a cluster; smaller clusters are discarded.
+    min_cluster_size: 3 # default is 5
+
+    # Max cost at a centroid to accept a frontier. Centroids with cost > this
+    # are rejected when use_costmap_filter is true.
+    #
+    # SCALE: this is compared against /global_costmap/costmap, which is a
+    # nav_msgs/OccupancyGrid, NOT the raw 0-255 costmap. Nav2's
+    # Costmap2DPublisher translation table maps raw -> grid as:
+    #   0 (FREE) -> 0 | 1..252 -> 1..98 | 253 (INSCRIBED) -> 99
+    #   254 (LETHAL) -> 100 | 255 (NO_INFORMATION) -> -1
+    # so the only values a known cell can carry are 0..100. The old 150 was on
+    # the raw 0-255 scale and therefore sat above every reachable value: the
+    # cost test never rejected anything (only the separate unknown/out-of-bounds
+    # path did). 98 is the largest value that still rejects exactly the two
+    # states a goal can never be sent to -- 99 = inscribed (the robot's own
+    # footprint would collide) and 100 = lethal -- while accepting the whole
+    # 0..98 inflation gradient, so ordinary frontiers near a wall still pass.
+    cost_threshold: 98 # was 150 on the wrong (raw 0-255) scale
+
+    # If true, reject frontier centroids whose costmap cost exceeds cost_threshold.
+    use_costmap_filter: true
+
+    # Visualization: publish raw frontier cells and rejected centroids as markers.
+    publish_raw_markers: true
+    publish_rejected_markers: true
+
+    # If true, print step-by-step frontier debug at INFO; otherwise only at DEBUG.
+    verbose_frontier_logging: false
+
+goal_assignment_node:
+  ros__parameters:
+    # Odometry topic (e.g. /odom or /odometry/filtered from robot_localization).
+    odom_topic: "/odometry/filtered"
+
+    # Nav2 action name for sending navigation goals.
+    navigate_to_pose_action: "navigate_to_pose"
+
+    # Ignore frontier centroids closer than this to the robot (m). Avoids sending trivial goals.
+    min_frontier_distance: 0.5
+
+    # Cancel a goal and try another if it does not complete within this time (s).
+    goal_timeout: 20.0 # default is 60.0
+
+    # Frame for goal poses (typically "map"). Also used for TF lookups (map -> base_link).
+    frame_id: "map"
+    robot_base_frame: "base_link"
+
+    # How often to evaluate and send the next goal (Hz). Only used when idle.
+    rate: 1.0
+
+    # Do not select a goal within this distance (m) of the last failed/aborted goal.
+    failed_goal_avoidance_radius: 1.0
+    # Failed goals are kept as a TIME-LIMITED SET, not one slot. The single
+    # slot let a failing fallback goal overwrite a failing frontier goal and
+    # re-arm it, producing a 40 s limit cycle that never ended
+    # (NOTES.md 7.8). TTL is what re-admits a goal that only failed because
+    # the map was still unknown there.
+    failed_goal_ttl_sec: 90.0
+    failed_goal_max_entries: 64
+
+    # Throttle "no valid frontiers" / exploration-complete logs to this interval (s).
+    exploration_complete_log_interval: 5.0
+
+    # Wait for startup_map_warmup_node to publish Bool true on this topic before first frontier goal.
+    require_startup_warmup: true
+    startup_warmup_complete_topic: "exploration_warmup_complete"
+    startup_warmup_timeout_sec: 90.0
+
+    # Anti-loop: drop frontier centroids near map positions already reached successfully >= N times.
+    enable_repeated_centroid_filter: true
+    repeated_centroid_reject_radius: 0.45
+    repeated_centroid_max_visits: 2
+
+    # Selection strategy: "nearest" = choose closest frontier to robot. Other values reserved for future use.
+    # (Current implementation uses nearest only; this documents intended semantics.)
+    # selection_strategy: "nearest"
+
+    # ── Bootstrap-drive fallback ─────────────────────────────────────────
+    # Replaces the legacy in-place 360° perception sweep. When exploration
+    # is enabled but no frontier centroid passes the filters above (typical
+    # at startup before SLAM has grown the map, or after a single goal has
+    # been completed and only one short-distance frontier remains), this
+    # node samples points around the robot, looks up their cost in the
+    # global costmap, and sends the lowest-cost reachable one to Nav2.
+    # The robot actually translates, SLAM grows the map, and the normal
+    # frontier loop resumes on its own when new frontiers appear.
+    enable_fallback_drive: true
+
+    # Topic of the OccupancyGrid we query for cell costs. Same one Nav2
+    # planner uses; published with TRANSIENT_LOCAL durability.
+    fallback_costmap_topic: "/global_costmap/costmap"
+
+    # Distance from the robot at which candidate goal points are placed (m).
+    # Keep it short so the bot makes incremental progress and the local
+    # planner can plan inside the local costmap window.
+    fallback_radius_m: 1.5
+
+    # Number of evenly spaced angles to sample on that circle.
+    # 16 = every 22.5°, plenty for bootstrap movement without much CPU.
+    fallback_num_samples: 16
+
+    # OccupancyGrid cost above which a sample is rejected (0–100).
+    # 60 keeps us well below the lethal/inflated band but still allows
+    # picking through narrow corridors when nothing perfectly free exists.
+    fallback_max_cost: 60
+
+    # Minimum gap between two fallback dispatches (s). Prevents firing
+    # another goal every timer tick while Nav2 is still reacting to the
+    # previous one — without this, abort/cancel cycles can spam the action
+    # server during transient costmap updates.
+    fallback_cooldown_sec: 4.0
+
+    # ── Exploration-complete detection ───────────────────────────────────
+    # Once the SLAM scan has converged (frontier_detection consistently
+    # reports zero safe centroids) the bot has nothing useful to chase
+    # anymore. Without this guard the fallback path picks low-cost points
+    # *inside the already-known map*, so the robot would bounce between
+    # explored regions forever (e.g. (1.00, 1.44) ↔ (0.94, -0.28)).
+    enable_exploration_complete_detection: true
+
+    # Number of consecutive `/frontiers` messages with zero poses required
+    # to declare the scan complete. frontier_detection publishes once per
+    # map update (≈ 5 s in this stack), so 3 × 5 s ≈ 15 s of "no new
+    # frontiers" before stopping. Raise it to be more conservative.
+    empty_frontier_streak_threshold: 3
+
+    # Stalemate guard. /frontiers may keep publishing non-empty PoseArrays
+    # consisting entirely of centroids that selectBestFrontier rejects
+    # (anti-loop, failed_goal_avoidance, min_frontier_distance). In that
+    # case `empty_frontier_streak_threshold` would never trigger. If we
+    # also fail to find a low-cost fallback point, the bot would sit idle
+    # forever, logging "No valid frontiers" every 5 s.
+    #
+    # `stalemate_idle_sec` defines how long that "all frontier candidates
+    # filtered AND fallback unavailable" condition has to persist before
+    # we give up and declare exploration complete anyway. 20 s gives Nav2
+    # plenty of time to re-evaluate the costmap, but stops the bot from
+    # hesitating next to a corner person indefinitely.
+    stalemate_idle_sec: 20.0
+    # Exploration-complete detection no longer requires a prior successful
+    # goal (that gate was shut exactly when the node was deadlocked). Instead
+    # it refuses to fire until exploration has been running this long.
+    min_exploration_time_sec: 60.0
+
+    # What to do when the scan is declared complete:
+    #   "stop"        — just stay idle. Cleanest for a demo / debug.
+    #   "return_home" — dispatch one Nav2 goal back to the start pose
+    #                   (recorded from TF on first successful lookup).
+    # In both cases new frontiers (e.g. door opens, object moves) will
+    # automatically resume exploration via frontiersCallback.
+    on_exploration_complete: "stop"

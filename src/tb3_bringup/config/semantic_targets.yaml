@@ -1,0 +1,71 @@
+# ============================================================
+# semantic_targets.yaml — Canonical semantic object registry
+# ============================================================
+#
+# Single source of truth for the three naming layers used in this project:
+#
+#   semantic_name    Human-facing label. Used by the rule-based command
+#                    parser in tb3_query.
+#                    This is what a user says: "go to the trash can".
+#
+#   detector_label   Class string the detector emits. Used in detector.yaml
+#                    class_filter. This is what infer() must report.
+#                    Kept separate from semantic_name on purpose: with the
+#                    fine-tuned tb3det_yolo26n weights the two agree for all
+#                    three targets, but with COCO weights they do not (COCO
+#                    has no trash-can class and calls the can "traffic light"),
+#                    and a detector must report what the network says.
+#
+#   gazebo_model     Directory name under ~/.gazebo/models used in
+#                    Gazebo world files via model:// URI.
+#                    This is a simulation-only field; irrelevant at runtime.
+#
+# Validation status (F1 ablation, yolo26n, 2026-08-27): every entry below was
+# measured over 3 distances x 3 aspects x 30 frames. An object only qualifies
+# if BOTH hold:
+#   detection - its own COCO class reaches p50 conf >= 0.35 at some viewpoint
+#   ranging   - the LDS-01 returns a stable range with error <= 0.3 m,
+#               no 3.5 m saturation and no missing returns
+# table (bench) and stop_sign both FAILED and have been removed: table_marble
+# is invisible to the LiDAR (beam_hit 0.15, link posed at z=0.648) and the
+# stop sign's pole is too thin (beam_hit 0.16), which is what put its landmark
+# 4.38 m from the real object in the 2026-08-25 full-stack run.
+#
+# To disable an object without deleting it: set enabled: false.
+# The tb3_query command parser reads only enabled entries.
+# ============================================================
+
+semantic_targets:
+
+  - semantic_name:   "person"
+    detector_label:  "person"
+    gazebo_model:    "person_standing"
+    enabled:         true
+    notes: >
+      Direct label match and the strongest target of the three:
+      yolo26n p50 0.92 at 2.0 m side-on, LiDAR error 0.05 m median.
+
+  - semantic_name:   "trash_can"
+    detector_label:  "trash_can"
+    gazebo_model:    "first_2015_trash_can"
+    enabled:         true
+    notes: >
+      Detected as its own class by the fine-tuned tb3det_yolo26n weights.
+      With the COCO yolo26n weights this entry had detector_label
+      "traffic light" (COCO has no trash-can class; p50 0.45 at 1.5 m) --
+      the clearest example in the course of why semantic_name and
+      detector_label are separate fields. Best of all three on ranging:
+      beam_hit 1.00 everywhere, constant -0.22 m offset (the can's radius)
+      with 0.02 m jitter.
+
+  - semantic_name:   "chair"
+    detector_label:  "chair"
+    gazebo_model:    "VisitorChair"
+    enabled:         true
+    notes: >
+      Direct label match. p50 0.52 at 3.0 m / 45 deg; falls below the 0.35 bar
+      when viewed head-on at 1.5-2.0 m, so it is placed where the robot tends
+      to see it from 2.5-3.5 m. Chosen over Fuel's "Chair" model, which scores
+      higher on confidence (0.65) but whose thin legs give beam_hit as low as
+      0.09 and no LiDAR return at all in 2 of 9 poses — the same failure mode
+      that broke the stop sign.
