@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # send_command.sh — publish /user_command with receipt verification.
-# Run on the HOST; it exec's into the docker-sim-1 container.
+# Run on the HOST; it exec's into the tb3-semantic-nav-sim-1 container.
 #
 # `ros2 topic pub --once` intermittently loses the first message (known
 # since the August runbook). Instead of blind double-sends (which the
@@ -16,7 +16,7 @@ LOG="$2"
 for attempt in 1 2 3; do
   BEFORE=$(grep -c "User command: '$CMD'" "$LOG" 2>/dev/null | head -1)
   BEFORE=${BEFORE:-0}
-  docker exec docker-sim-1 bash -c \
+  docker exec tb3-semantic-nav-sim-1 bash -c \
     "source /opt/ros/humble/setup.bash && source /home/ubuntu/ws/install/setup.bash && \
      ros2 topic pub --once /user_command std_msgs/String \"data: '$CMD'\"" \
      >/dev/null 2>&1

@@ -32,6 +32,15 @@ fi
 
 touch "${MARKER}" 2>/dev/null || true
 
+# Inside the sim container: generate the coloured-shirt person models the
+# default LocateAnything world uses (git-ignored, ~28 MB each), once.
+if [ -d /opt/gazebo_models/person_standing ] \
+   && [ ! -d "${WS_ROOT}/src/tb3_frontier_exploration/models/person_green_shirt" ]; then
+  echo "=== Generating person_{red,green,blue}_shirt Gazebo models ==="
+  python3 "${WS_ROOT}/scripts/make_person_variants.py" \
+    --dst "${WS_ROOT}/src/tb3_frontier_exploration/models"
+fi
+
 echo "=== Build SUCCESS ==="
 echo "Built packages:"
 for d in "${WS_ROOT}/install/"*/; do

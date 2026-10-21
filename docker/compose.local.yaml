@@ -1,5 +1,4 @@
-# Host-specific compose overlay (committed on purpose — this is a
-# single-machine project; adjust the marked paths on any other host).
+# Host-specific compose overlay: X11 auth and the NVIDIA EGL vendor file.
 # Every compose command needs both files, in this order:
 #
 #   docker compose -f docker/compose.yaml -f docker/compose.local.yaml <cmd>
@@ -10,16 +9,14 @@ services:
       # X11 cookie for the host display, mounted below.
       - XAUTHORITY=/tmp/.host_xauth
     volumes:
-      # ── HOST-SPECIFIC ── X11 auth cookie. This host runs a GDM Xorg
-      # session, whose cookie lives under /run/user/<uid>/gdm/Xauthority.
-      # If $XAUTHORITY is unset in the invoking shell, the fallback below
-      # must match `echo $XAUTHORITY` from a desktop terminal. (On hosts
-      # using ~/.Xauthority, point it there instead.)
-      - ${XAUTHORITY:-/run/user/1000/gdm/Xauthority}:/tmp/.host_xauth:ro
-      # ── HOST-SPECIFIC ── The NVIDIA Container Toolkit on this host
-      # injects the driver libraries but NOT the glvnd EGL vendor
-      # descriptor, so glvnd silently falls back to Mesa llvmpipe (August
-      # stack, stage4_5_stack_verification.md §3.2). Bind-mounting the
-      # host's 107-byte ICD JSON read-only keeps hardware GL across
-      # container recreation. Path is the stock Ubuntu driver location.
+      # ── HOST-SPECIFIC ── X11 auth cookie. Taken from $XAUTHORITY of the
+      # shell that runs compose (set in a desktop terminal of an Xorg
+      # session, e.g. /run/user/<uid>/gdm/Xauthority under GDM); falls back
+      # to ~/.Xauthority.
+      - ${XAUTHORITY:-${HOME}/.Xauthority}:/tmp/.host_xauth:ro
+      # ── HOST-SPECIFIC ── The NVIDIA Container Toolkit injects the driver
+      # libraries but NOT the glvnd EGL vendor descriptor, so glvnd
+      # silently falls back to Mesa llvmpipe. Bind-mounting the host's ICD
+      # JSON read-only keeps hardware GL. Path is the stock Ubuntu NVIDIA
+      # driver location; the file must exist on the host.
       - /usr/share/glvnd/egl_vendor.d/10_nvidia.json:/usr/share/glvnd/egl_vendor.d/10_nvidia.json:ro

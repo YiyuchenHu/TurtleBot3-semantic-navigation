@@ -20,6 +20,10 @@ except ImportError:
     from boxparse import parse_boxes, parse_labeled_boxes
 
 _MODEL_ID = "nvidia/LocateAnything-3B"
+# Hugging Face commit of _MODEL_ID this backend was validated against
+# (weights and trust_remote_code modules). Pinned because the remote code's
+# generate() is not a stable API; only applied to the default model id.
+_MODEL_REVISION = "c32291ca5e996f5a7a485845b4f57a233936bba0"
 # Must match the model card's ground_multi template verbatim — the model is
 # prompt-sensitive and other phrasings degrade box recall.
 _PROMPT_TEMPLATE = ("Locate all the instances that match the following "
@@ -113,6 +117,7 @@ class LocateAnythingBackend:
                  dtype: str = "auto", max_new_tokens: int = 2048,
                  options: dict | None = None, **_kwargs) -> None:
         self.model_id = model_id
+        self.revision = _MODEL_REVISION if model_id == _MODEL_ID else None
         self.device = device
         self.dtype = dtype
         self.options = dict(DEFAULT_OPTIONS)
@@ -147,12 +152,13 @@ class LocateAnythingBackend:
 
         t0 = time.monotonic()
         self._tokenizer = AutoTokenizer.from_pretrained(
-            self.model_id, trust_remote_code=True)
+            self.model_id, revision=self.revision, trust_remote_code=True)
         self._processor = AutoProcessor.from_pretrained(
-            self.model_id, trust_remote_code=True)
+            self.model_id, revision=self.revision, trust_remote_code=True)
         self._model = (
             AutoModel.from_pretrained(
                 self.model_id,
+                revision=self.revision,
                 torch_dtype=self._torch_dtype,
                 trust_remote_code=True,
             )

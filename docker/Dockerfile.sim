@@ -1,9 +1,9 @@
 # Sim image: ROS 2 Humble (Ubuntu 22.04) + Gazebo Classic 11 + Nav2/SLAM
 # + CPU torch/ultralytics for the YOLOv8n baseline detector.
 #
-# Design notes (see reports/R01 §5.6):
+# Design notes:
 #   * This image renders through X11/GLX on the host's display — NOT the
-#     headless-EGL form of the old Jazzy image. gzclient/RViz show up as
+#     headless-EGL form of an earlier Jazzy image. gzclient/RViz show up as
 #     normal windows on the host screen (which is also how demo recording
 #     is done). The NVIDIA Container Toolkit injects libGLX_nvidia at run
 #     time, keyed off the two NVIDIA_* env vars below.
@@ -46,8 +46,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # model://first_2015_trash_can and model://construction_cone for the
 # open-vocabulary targets. None of them ship with the gazebo11 apt
 # packages; Gazebo Classic would try to fetch them from the online model
-# database at runtime, which stalls for minutes on this host (VPN blocks
-# container egress). Fetch them once at build time instead — from the
+# database at runtime, which can stall for minutes (or forever, without
+# network access). Fetch them once at build time instead — from the
 # osrf gazebo_models GitHub repo (a sparse, blobless clone of just these
 # dirs, not the full ~1 GB repo). Fuel is NOT equivalent: its copies are
 # renamed ("Standing person"), which breaks model:// URI lookup.
@@ -74,8 +74,8 @@ ENV GAZEBO_MODEL_PATH=/opt/gazebo_models \
     GAZEBO_MODEL_DATABASE_URI=""
 
 # ── Python: CPU torch + ultralytics for the YOLOv8n baseline ─────────────
-# Pins, all load-bearing (inherited from the verified Jazzy image, same
-# failure modes apply on Humble):
+# Pins, all load-bearing (the torch / torchvision / ultralytics versions
+# are the ones the demo was recorded with):
 #   * torch from the CPU index — cu12x wheels would drag ~3 GB of nvidia-*
 #     runtime into an image that never runs GPU inference. torch installed
 #     FIRST so ultralytics finds it satisfied and does not pull the CUDA
@@ -94,15 +94,15 @@ ENV GAZEBO_MODEL_PATH=/opt/gazebo_models \
 #                     compiled cv_bridge still returns OpenCV-4 numbering.
 # Pins installed last, after anything that might upgrade them.
 RUN pip3 install --no-cache-dir \
-        --index-url https://download.pytorch.org/whl/cpu torch torchvision \
-    && pip3 install --no-cache-dir ultralytics \
-    && pip3 install --no-cache-dir 'numpy<2' 'setuptools==58.2.0' 'opencv-python<5' \
+        --index-url https://download.pytorch.org/whl/cpu 'torch==2.14.0' 'torchvision==0.29.0' \
+    && pip3 install --no-cache-dir 'ultralytics==8.4.152' \
+    && pip3 install --no-cache-dir 'numpy==1.26.4' 'setuptools==58.2.0' 'opencv-python==4.11.0.86' \
     && python3 -c "import torch; assert torch.version.cuda is None, 'expected a CPU torch build, got cu' + str(torch.version.cuda); print('torch', torch.__version__, '(cpu)')" \
     && python3 -c "import cv2; assert cv2.CV_8UC3 == 16, f'CV_8UC3={cv2.CV_8UC3}, expected 16 (cv_bridge ABI mismatch)'" \
     && python3 -c "import numpy; assert numpy.__version__.startswith('1.'), numpy.__version__; print('numpy', numpy.__version__)" \
     && python3 -c "import ultralytics; print('ultralytics', ultralytics.__version__)"
 
-# ── jersey_barrier (R05) ─────────────────────────────────────────────────
+# ── jersey_barrier ───────────────────────────────────────────────────────
 # Fifth world object, registry class "traffic barrier". Its own layer,
 # placed AFTER the heavy pip layer on purpose: adding a model must not
 # invalidate the cached torch download above.
@@ -120,6 +120,13 @@ RUN chmod +x /usr/local/bin/entrypoint.sh
 
 ENV TURTLEBOT3_MODEL=waffle_pi
 
+# Interactive shells (`docker compose exec sim bash`) do not run the
+# entrypoint, so source ROS and the workspace overlay from .bashrc too.
+RUN printf '%s\n' \
+        'source /opt/ros/humble/setup.bash' \
+        '[ -f ~/ws/install/setup.bash ] && source ~/ws/install/setup.bash' \
+        > /etc/profile.d/zz-tb3-ros.sh
+
 # uid 1000 matches the host user, so files written into the bind-mounted
 # workspace stay owned by them. Pre-create every path compose mounts a
 # named volume onto — Docker seeds a fresh named volume from the image's
@@ -130,6 +137,7 @@ RUN useradd -m -u 1000 -s /bin/bash ubuntu \
     && mkdir -p /home/ubuntu/ws/build /home/ubuntu/ws/install /home/ubuntu/ws/log \
                 /home/ubuntu/.tb3_semantic_nav/evidence \
                 /home/ubuntu/.gazebo \
+    && cat /etc/profile.d/zz-tb3-ros.sh >> /home/ubuntu/.bashrc \
     && chown -R ubuntu:ubuntu /home/ubuntu
 # ^ .gazebo pre-created for the same reason as the ws dirs: compose
 # bind-mounts gazebo_gui.ini inside it, and a parent directory Docker
@@ -140,7 +148,6 @@ USER ubuntu
 WORKDIR /home/ubuntu/ws
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
-# No Jupyter here (unlike the Jazzy image): the stack is driven with
-# `docker exec … ros2 launch` + terminals, per project ground rules. The
-# container just idles until exec'd into.
+# The stack is driven with `docker compose exec sim ros2 launch …` from
+# terminals; the container just idles until exec'd into.
 CMD ["sleep", "infinity"]

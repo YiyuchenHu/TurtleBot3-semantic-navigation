@@ -9,7 +9,7 @@
 # Python 3.12, so building this on 24.04 forces numpy to build from source
 # against a Python it predates. Jammy's Python 3.10 takes the wheel.
 #
-# As with the sim image, the base is plain ubuntu: the pip cu121 torch
+# The base is plain ubuntu: the pip cu128 torch
 # wheels vendor their own CUDA runtime and cuDNN, and libcuda.so is
 # injected at runtime by the NVIDIA Container Toolkit.
 FROM ubuntu:22.04
@@ -30,21 +30,23 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Versions per https://huggingface.co/nvidia/LocateAnything-3B. They are
 # pinned exactly because the model's generation path is sensitive to the
 # transformers release: the hybrid parallel-box decode it uses is not a
-# stable public API.
+# stable public API. torch / torchvision / peft / accelerate are the
+# versions the demo was recorded with; cu128 wheels need an NVIDIA driver
+# >= 570 (and are what Blackwell / RTX 50xx GPUs require).
 RUN pip3 install --no-cache-dir \
-        --index-url https://download.pytorch.org/whl/cu128 torch torchvision \
+        --index-url https://download.pytorch.org/whl/cu128 'torch==2.11.0' 'torchvision==0.26.0' \
     && pip3 install --no-cache-dir \
         "transformers==4.57.1" \
         "numpy==1.25.0" \
         "Pillow==11.1.0" \
         "opencv-python-headless==4.11.0.86" \
-        peft \
+        "peft==0.20.0" \
         "decord==0.6.0" \
         "lmdb==1.7.5" \
-        accelerate \
+        "accelerate==1.15.0" \
     && python3 -c "import torch; assert torch.version.cuda, 'torch is a CPU build; expected a cu12x wheel'; print('torch', torch.__version__, 'cuda', torch.version.cuda)"
 
-# Weights are ~7 GB and download on first start. compose mounts a named
+# Weights are ~7.7 GB and download on first start. compose mounts a named
 # volume here so a container restart does not re-fetch them.
 ENV HF_HOME=/hf-cache
 RUN mkdir -p /hf-cache

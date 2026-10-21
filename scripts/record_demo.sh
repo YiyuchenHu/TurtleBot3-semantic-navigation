@@ -39,7 +39,7 @@ true_pos() {  # window-id -> "x y" from host xwininfo (ground truth)
 
 arrange() {
   local IDS GZ RV PN
-  IDS=$(docker exec docker-sim-1 bash -c '
+  IDS=$(docker exec tb3-semantic-nav-sim-1 bash -c '
     export DISPLAY=:1 XAUTHORITY=/tmp/.host_xauth
     GZ=$(xdotool search --class gazebo 2>/dev/null | while read w; do
           [ "$(xdotool getwindowname $w 2>/dev/null)" = Gazebo ] && echo $w && break; done)
@@ -51,14 +51,14 @@ arrange() {
   if [ -z "$GZ" ] || [ -z "$RV" ] || [ -z "$PN" ]; then
     echo "arrange: missing window (GZ=$GZ RV=$RV PN=$PN)"; return 1
   fi
-  docker exec docker-sim-1 bash -c "export DISPLAY=:1 XAUTHORITY=/tmp/.host_xauth
+  docker exec tb3-semantic-nav-sim-1 bash -c "export DISPLAY=:1 XAUTHORITY=/tmp/.host_xauth
     xdotool windowsize $GZ 960 1080; xdotool windowsize $RV 960 540; xdotool windowsize $PN 960 540"
   local spec tgt w tx ty px py sx sy i
   for spec in "$GZ:0:138" "$RV:960:138" "$PN:960:678"; do
     IFS=: read -r w tx ty <<< "$spec"
     sx=$tx; sy=$ty
     for i in 1 2 3 4 5 6; do
-      docker exec docker-sim-1 bash -c "export DISPLAY=:1 XAUTHORITY=/tmp/.host_xauth; xdotool windowmove $w $sx $sy"
+      docker exec tb3-semantic-nav-sim-1 bash -c "export DISPLAY=:1 XAUTHORITY=/tmp/.host_xauth; xdotool windowmove $w $sx $sy"
       sleep 0.4
       read -r px py <<< "$(true_pos "$w")"
       [ "$px" = "$tx" ] && [ "$py" = "$ty" ] && break
@@ -67,7 +67,7 @@ arrange() {
     echo "window $w at ($px,$py) target ($tx,$ty)"
     [ "$px" = "$tx" ] && [ "$py" = "$ty" ] || { echo "arrange: FAILED to place $w"; return 1; }
   done
-  docker exec docker-sim-1 bash -c "export DISPLAY=:1 XAUTHORITY=/tmp/.host_xauth
+  docker exec tb3-semantic-nav-sim-1 bash -c "export DISPLAY=:1 XAUTHORITY=/tmp/.host_xauth
     xdotool windowraise $GZ; xdotool windowraise $RV; xdotool windowraise $PN"
   echo "arranged; capture region ${CW}x${CH}+${OX},${OY}"
 }
