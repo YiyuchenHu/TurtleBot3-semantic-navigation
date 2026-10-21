@@ -93,6 +93,9 @@ services:
       # for probes and /ground.
       - GROUNDING_SAMPLING=greedy
       - GROUNDING_GENERATION_MODE=fast
+      # The container runs as root and /app is the bind-mounted checkout:
+      # without this, root-owned __pycache__ dirs end up in grounding/.
+      - PYTHONDONTWRITEBYTECODE=1
     depends_on:
       - sim
     deploy:
